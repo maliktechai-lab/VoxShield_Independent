@@ -249,6 +249,30 @@ def train(args: argparse.Namespace) -> None:
         force_rebuild=args.force_rebuild_index,
     )
 
+    # ── Safety guards — fail early with a clear message ───────────────────────
+    if len(train_records) == 0:
+        logger.error(
+            "Training dataset is empty — 0 records resolved.\n"
+            f"  Dataset dir : {dataset_dir}\n"
+            "  Expected to find .flac files under flac_T/.\n"
+            "  Run: python -m training.prepare_asvspoof5 "
+            f"--dataset-dir \"{dataset_dir}\" --force-rebuild"
+        )
+        sys.exit(1)
+
+    if len(val_records) == 0:
+        logger.error(
+            "Validation dataset is empty — 0 records resolved.\n"
+            "  Cannot train without a validation set.\n"
+            "  Check dev audio in flac_D/ or increase --val-speaker-fraction."
+        )
+        sys.exit(1)
+
+    logger.info(
+        f"Dataset: {len(train_records):,} train records, "
+        f"{len(val_records):,} val records"
+    )
+
     train_ds = ASVspoof5Dataset(
         train_records,
         max_samples=int(MODEL_CONFIG["max_length_sec"] * MODEL_CONFIG["sample_rate"]),

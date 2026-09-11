@@ -106,18 +106,28 @@ VoxShield uses the [ASVspoof5](https://www.asvspoof.org/index2024.html) dataset 
 - `0` = bonafide (genuine human speech)
 - `1` = spoof (synthetic / voice-converted speech)
 
-Expected dataset structure:
+**Official ASVspoof5 native layout** (after extracting the official archives directly into your dataset root):
+
 ```
-<DATASET>/
-    protocols/
-        ASVspoof5.train.tsv
-        ASVspoof5.dev.track_1.tsv
-        ASVspoof5.eval.track_1.tsv
-    train/
-        flac_T/
-            T_0000000000.flac
-            ...
+D:\Datasets\ASVspoof5\
+    ASVspoof5.train.tsv              ← training protocol (182,357 utterances)
+    ASVspoof5.dev.track_1.tsv        ← development protocol (optional)
+    ASVspoof5.eval.track_1.tsv       ← evaluation protocol (optional)
+    flac_T\
+        T_0000000000.flac            ← training audio (extract flac_T_aa…ae.tar here)
+        T_0000000001.flac
+        ...
+    flac_D\                          ← development audio (optional)
+        D_0000000000.flac
+        ...
+    flac_E_eval\                     ← evaluation audio (optional)
+        E_0000000000.flac
+        ...
 ```
+
+> **Note:** Do NOT create artificial `train/` or `dev/` subdirectories.
+> Extract the archives directly at the dataset root.
+> Both flat root (above) and a `protocols/` subdirectory for the TSV files are supported.
 
 ---
 

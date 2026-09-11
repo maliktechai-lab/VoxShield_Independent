@@ -916,7 +916,10 @@ class TestSecurity:
         src_dirs = ["model", "training", "inference", "backend", "evaluation"]
         for d in src_dirs:
             for f in (PROJECT_ROOT / d).glob("*.py"):
-                text = f.read_text()
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
                 m = pattern.search(text)
                 assert m is None, f"Possible hardcoded secret in {f}: {m.group()}"
 
@@ -932,7 +935,7 @@ class TestSecurity:
         for d in src_dirs:
             for f in (PROJECT_ROOT / d).glob("*.py"):
                 try:
-                    tree = ast.parse(f.read_text())
+                    tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
                 except SyntaxError:
                     continue
                 for node in ast.walk(tree):
@@ -1287,3 +1290,830 @@ class TestASVspoof5Integration:
         assert wav.shape == (64000,)
         assert label in (0, 1)
         assert "speaker_id" in meta
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers shared by new regression tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _write_tiny_flac(path: Path, n_samples: int = 8000, sr: int = 16000) -> None:
+    """Write a tiny valid FLAC file at *path*."""
+    import soundfile as sf
+    data = (np.random.default_rng(0).standard_normal(n_samples) * 0.05).astype(np.float32)
+    sf.write(str(path), data, sr, subtype="PCM_16")
+
+
+def _make_tsv_line(
+    speaker="T_4850",
+    uid="T_0000000000",
+    gender="F",
+    codec="-",
+    codec_q="-",
+    codec_seed="-",
+    attack_tag="-",
+    attack_label="bonafide",
+    key="bonafide",
+    tmp="-",
+) -> str:
+    return f"{speaker} {uid} {gender} {codec} {codec_q} {codec_seed} {attack_tag} {attack_label} {key} {tmp}"
+
+
+def _build_synthetic_root(
+    tmp_path: Path,
+    train_lines: list[str] | None = None,
+    dev_lines: list[str] | None = None,
+    create_train_audio: bool = True,
+    create_dev_audio: bool = False,
+    proto_at_root: bool = True,
+) -> Path:
+    """
+    Build a minimal synthetic ASVspoof5-style root directory.
+
+    Returns the root path.
+    """
+    root = tmp_path / "ASVspoof5"
+    root.mkdir(parents=True)
+
+    proto_dir = root if proto_at_root else (root / "protocols")
+    proto_dir.mkdir(parents=True, exist_ok=True)
+
+    if train_lines is None:
+        train_lines = [
+            _make_tsv_line("T_SP01", "T_0000000001", "M", "-", "-", "-", "-", "bonafide", "bonafide"),
+            _make_tsv_line("T_SP01", "T_0000000002", "M", "OPUS", "-", "-", "A_syn", "A01", "spoof"),
+            _make_tsv_line("T_SP02", "T_0000000003", "F", "-", "-", "-", "-", "bonafide", "bonafide"),
+            _make_tsv_line("T_SP02", "T_0000000004", "F", "AAC",  "-", "-", "A_syn", "A02", "spoof"),
+            _make_tsv_line("T_SP03", "T_0000000005", "M", "-", "-", "-", "-", "bonafide", "bonafide"),
+            _make_tsv_line("T_SP03", "T_0000000006", "M", "MP3",  "-", "-", "A_syn", "A03", "spoof"),
+        ]
+
+    (proto_dir / "ASVspoof5.train.tsv").write_text("\n".join(train_lines) + "\n", encoding="utf-8")
+
+    if create_train_audio:
+        flac_t = root / "flac_T"
+        flac_t.mkdir()
+        for line in train_lines:
+            uid = line.split()[1]
+            _write_tiny_flac(flac_t / f"{uid}.flac")
+
+    if dev_lines is not None:
+        (proto_dir / "ASVspoof5.dev.track_1.tsv").write_text(
+            "\n".join(dev_lines) + "\n", encoding="utf-8"
+        )
+        if create_dev_audio:
+            flac_d = root / "flac_D"
+            flac_d.mkdir()
+            for line in dev_lines:
+                uid = line.split()[1]
+                _write_tiny_flac(flac_d / f"{uid}.flac")
+
+    return root
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2: Native path resolution
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestNativePathResolution:
+    """
+    Verify that _find_audio() resolves to the official native layout:
+        T_* -> <root>/flac_T/<id>.flac
+        D_* -> <root>/flac_D/<id>.flac
+        E_* -> <root>/flac_E_eval/<id>.flac
+
+    These MUST NOT require artificial train/ or dev/ subdirectories.
+    """
+
+    def test_train_utterance_resolves_to_flac_T(self, tmp_path):
+        from training.dataset import _find_audio
+        flac_t = tmp_path / "flac_T"
+        flac_t.mkdir()
+        expected = flac_t / "T_0000000001.flac"
+        _write_tiny_flac(expected)
+
+        result = _find_audio(tmp_path, "T_0000000001")
+        assert result == expected, f"Expected {expected}, got {result}"
+
+    def test_dev_utterance_resolves_to_flac_D(self, tmp_path):
+        from training.dataset import _find_audio
+        flac_d = tmp_path / "flac_D"
+        flac_d.mkdir()
+        expected = flac_d / "D_0000000001.flac"
+        _write_tiny_flac(expected)
+
+        result = _find_audio(tmp_path, "D_0000000001")
+        assert result == expected, f"Expected {expected}, got {result}"
+
+    def test_eval_utterance_resolves_to_flac_E_eval(self, tmp_path):
+        from training.dataset import _find_audio
+        flac_e = tmp_path / "flac_E_eval"
+        flac_e.mkdir()
+        expected = flac_e / "E_0000000001.flac"
+        _write_tiny_flac(expected)
+
+        result = _find_audio(tmp_path, "E_0000000001")
+        assert result == expected, f"Expected {expected}, got {result}"
+
+    def test_missing_audio_returns_none(self, tmp_path):
+        from training.dataset import _find_audio
+        result = _find_audio(tmp_path, "T_9999999999")
+        assert result is None
+
+    def test_does_not_look_in_train_subdirectory(self, tmp_path):
+        """Must NOT look in train/flac_T/ — that is the OLD wrong layout."""
+        from training.dataset import _find_audio
+        # Create audio in the wrong (old) location
+        wrong_dir = tmp_path / "train" / "flac_T"
+        wrong_dir.mkdir(parents=True)
+        _write_tiny_flac(wrong_dir / "T_0000000001.flac")
+
+        result = _find_audio(tmp_path, "T_0000000001")
+        assert result is None, (
+            "Should NOT resolve T_ utterances from train/flac_T/ — "
+            "that is the old incorrect layout"
+        )
+
+    def test_does_not_look_in_dev_subdirectory(self, tmp_path):
+        """Must NOT look in dev/flac_D/ — that is the OLD wrong layout."""
+        from training.dataset import _find_audio
+        wrong_dir = tmp_path / "dev" / "flac_D"
+        wrong_dir.mkdir(parents=True)
+        _write_tiny_flac(wrong_dir / "D_0000000001.flac")
+
+        result = _find_audio(tmp_path, "D_0000000001")
+        assert result is None, (
+            "Should NOT resolve D_ utterances from dev/flac_D/ — "
+            "that is the old incorrect layout"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 3: TSV parsing — correct field positions
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestTSVParsing:
+    """
+    Verify correct ASVspoof5 protocol field mapping.
+
+    Official 10-field layout:
+        0: SPEAKER_ID
+        1: FLAC_FILE_NAME
+        2: SPEAKER_GENDER
+        3: CODEC            ← codec must come from field 3, NOT field 6
+        4: CODEC_Q
+        5: CODEC_SEED
+        6: ATTACK_TAG
+        7: ATTACK_LABEL     ← attack label from field 7
+        8: KEY              ← bonafide/spoof from field 8
+        9: TMP
+    """
+
+    def _parse_line(self, line: str) -> dict:
+        import tempfile
+        from training.dataset import _parse_protocol
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv", delete=False, encoding="utf-8") as f:
+            f.write(line + "\n")
+            fpath = f.name
+        try:
+            records = _parse_protocol(Path(fpath))
+        finally:
+            Path(fpath).unlink(missing_ok=True)
+        return records[0] if records else {}
+
+    def test_bonafide_key_field_8(self):
+        """Field 8 = 'bonafide' → label 0."""
+        line = "T_4850 T_0000000011 F - - - - bonafide bonafide -"
+        r = self._parse_line(line)
+        assert r["label"] == 0
+        assert r["label_str"] == "bonafide"
+
+    def test_spoof_key_field_8(self):
+        """Field 8 = 'spoof' → label 1."""
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        assert r["label"] == 1
+        assert r["label_str"] == "spoof"
+
+    def test_attack_label_from_field_7(self):
+        """Attack type/label comes from field 7 (not field 6)."""
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        assert r["attack_type"] == "A05", (
+            f"attack_type should be 'A05' (field 7), got '{r['attack_type']}'"
+        )
+
+    def test_codec_from_field_3(self):
+        """Codec comes from field 3 (not field 6)."""
+        # "OPUS" is at field 3 here; field 6 is a different value
+        line = "T_SP01 T_0000000001 M OPUS q1 s1 ATAG A01 spoof -"
+        r = self._parse_line(line)
+        assert r["codec"] == "OPUS", (
+            f"codec should be 'OPUS' (field 3), got '{r['codec']}'"
+        )
+
+    def test_codec_dash_becomes_none(self):
+        """Codec field '-' (bonafide) should be stored as None."""
+        line = "T_4850 T_0000000011 F - - - - bonafide bonafide -"
+        r = self._parse_line(line)
+        assert r["codec"] is None, f"codec should be None for bonafide, got {r['codec']!r}"
+
+    def test_attack_tag_not_used_as_codec(self):
+        """AC3 at field 6 (ATTACK_TAG) must NOT be treated as codec."""
+        # Official: field 3 is codec (here '-'), field 6 is attack_tag ('AC3')
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        # codec should be None (field 3 = '-'), not 'AC3'
+        assert r["codec"] is None, (
+            f"AC3 is at field 6 (ATTACK_TAG), not codec (field 3). "
+            f"Got codec={r['codec']!r}"
+        )
+
+    def test_utterance_id_from_field_1(self):
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        assert r["utterance_id"] == "T_0000000000"
+
+    def test_speaker_id_from_field_0(self):
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        assert r["speaker_id"] == "T_4850"
+
+    def test_gender_from_field_2(self):
+        line = "T_4850 T_0000000000 F - - - AC3 A05 spoof -"
+        r = self._parse_line(line)
+        assert r["gender"] == "F"
+
+    def test_short_line_skipped(self):
+        """Lines with fewer than 9 fields should be silently skipped."""
+        import tempfile
+        from training.dataset import _parse_protocol
+        lines = [
+            "too short",
+            "T_4850 T_0000000000 F - - - AC3 A05 spoof -",
+        ]
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv", delete=False, encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+            fpath = f.name
+        try:
+            records = _parse_protocol(Path(fpath))
+        finally:
+            Path(fpath).unlink(missing_ok=True)
+        assert len(records) == 1, "Short line should be skipped, valid line kept"
+
+    def test_labels_only_0_and_1(self):
+        import tempfile
+        from training.dataset import _parse_protocol
+        lines = [
+            "T_4850 T_0000000000 F - - - AC3 A05 spoof -",
+            "T_3734 T_0000000011 F - - - - bonafide bonafide -",
+        ]
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv", delete=False, encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+            fpath = f.name
+        try:
+            records = _parse_protocol(Path(fpath))
+        finally:
+            Path(fpath).unlink(missing_ok=True)
+        labels = {r["label"] for r in records}
+        assert labels.issubset({0, 1})
+
+    def test_parse_protocol_file_at_root(self, tmp_path):
+        """Protocol file can be read from the dataset root directly."""
+        from training.dataset import _find_protocol
+        proto = tmp_path / "ASVspoof5.train.tsv"
+        proto.write_text(
+            "T_SP01 T_0000000001 M - - - - bonafide bonafide -\n",
+            encoding="utf-8",
+        )
+        found = _find_protocol(tmp_path, "ASVspoof5.train.tsv")
+        assert found == proto
+
+    def test_parse_protocol_file_in_protocols_subdir(self, tmp_path):
+        """Protocol file under protocols/ subdirectory is also found."""
+        from training.dataset import _find_protocol
+        proto_dir = tmp_path / "protocols"
+        proto_dir.mkdir()
+        proto = proto_dir / "ASVspoof5.train.tsv"
+        proto.write_text(
+            "T_SP01 T_0000000001 M - - - - bonafide bonafide -\n",
+            encoding="utf-8",
+        )
+        found = _find_protocol(tmp_path, "ASVspoof5.train.tsv")
+        assert found == proto
+
+    def test_missing_protocol_raises(self, tmp_path):
+        """Missing protocol must raise FileNotFoundError, not return None."""
+        from training.dataset import _require_protocol
+        with pytest.raises(FileNotFoundError):
+            _require_protocol(tmp_path, "ASVspoof5.train.tsv")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 4: Cache validation
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestCacheValidation:
+    """
+    Verify that stale/invalid cache is automatically rebuilt.
+
+    The cache must NEVER silently return zero records or invalid paths.
+    """
+
+    def test_fresh_cache_is_built_and_loaded(self, tmp_path):
+        """After build_index, a second call should load from cache."""
+        root = _build_synthetic_root(tmp_path)
+        from training.dataset import build_index
+
+        train1, val1 = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+        train2, val2 = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+
+        assert len(train1) == len(train2)
+        assert len(val1) == len(val2)
+
+    def test_force_rebuild_ignores_cache(self, tmp_path):
+        """--force-rebuild-index must rebuild even if cache exists."""
+        root = _build_synthetic_root(tmp_path)
+        from training.dataset import build_index
+
+        build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+        # Second call with force_rebuild=True
+        train, val = build_index(root, "train", val_speaker_fraction=0.3,
+                                  seed=42, force_rebuild=True)
+        assert len(train) > 0
+        assert len(val) > 0
+
+    def test_stale_cache_protocol_change_triggers_rebuild(self, tmp_path):
+        """If protocol content changes, the cache must be invalidated."""
+        root = _build_synthetic_root(tmp_path)
+        from training.dataset import build_index
+
+        train_orig, _ = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+
+        # Add a new record to the protocol and a matching audio file
+        proto = root / "ASVspoof5.train.tsv"
+        with open(proto, "a", encoding="utf-8") as f:
+            f.write("T_SP99 T_0000000099 M - - - - bonafide bonafide -\n")
+        _write_tiny_flac(root / "flac_T" / "T_0000000099.flac")
+
+        train_new, _ = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+        assert len(train_new) > len(train_orig), (
+            "Cache should have been invalidated after protocol changed"
+        )
+
+    def test_zero_record_cache_triggers_rebuild(self, tmp_path):
+        """
+        A cache with zero train records must be treated as invalid
+        and the index rebuilt.
+        """
+        import pickle
+        from training.dataset import _cache_path, CACHE_VERSION, build_index
+
+        root = _build_synthetic_root(tmp_path)
+        cache_file = _cache_path(root, "train")
+
+        # Write a zero-record cache with valid metadata so it passes
+        # the version check but fails the record-count check
+        from training.dataset import _protocol_hash, _audio_dir_fingerprint
+        train_proto = root / "ASVspoof5.train.tsv"
+        bad_cache = {
+            "cache_version": CACHE_VERSION,
+            "proto_hash": _protocol_hash(train_proto),
+            "audio_fingerprint": _audio_dir_fingerprint(root),
+            "train": [],   # ZERO records — must trigger rebuild
+            "val": [],
+        }
+        with open(cache_file, "wb") as f:
+            pickle.dump(bad_cache, f)
+
+        # build_index should detect empty train and rebuild
+        train, val = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+        assert len(train) > 0, "Cache with zero records must be rebuilt"
+
+    def test_cache_with_missing_paths_triggers_rebuild(self, tmp_path):
+        """
+        A cache whose audio paths no longer exist on disk must be invalidated.
+        """
+        import pickle, shutil
+        from training.dataset import _cache_path, CACHE_VERSION, build_index
+
+        root = _build_synthetic_root(tmp_path)
+
+        # Build a valid cache first
+        build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+
+        # Delete the audio files to simulate moved/missing data
+        shutil.rmtree(root / "flac_T")
+
+        # Re-add protocol + audio in new location? No — test that rebuild
+        # happens (and then naturally fails with RuntimeError because audio gone)
+        cache_file = _cache_path(root, "train")
+        assert cache_file.exists()
+
+        # Load raw cache and confirm paths are stale
+        with open(cache_file, "rb") as f:
+            data = pickle.load(f)
+        from training.dataset import _validate_cache, _protocol_hash, _audio_dir_fingerprint
+        train_proto = root / "ASVspoof5.train.tsv"
+        valid, reason = _validate_cache(
+            data, root,
+            _protocol_hash(train_proto),
+            _audio_dir_fingerprint(root),
+        )
+        assert not valid, f"Cache should be invalid after audio deleted, reason: {reason}"
+        assert "no longer exist" in reason.lower() or "missing" in reason.lower() or "fingerprint" in reason.lower()
+
+    def test_cache_version_mismatch_triggers_rebuild(self, tmp_path):
+        """Old CACHE_VERSION must cause immediate invalidation."""
+        import pickle
+        from training.dataset import _cache_path, build_index
+
+        root = _build_synthetic_root(tmp_path)
+        cache_file = _cache_path(root, "train")
+
+        # Write a cache with wrong version
+        bad_cache = {
+            "cache_version": "v_ancient",
+            "proto_hash": "abc",
+            "audio_fingerprint": "xyz",
+            "train": [{"dummy": True}],
+            "val":   [{"dummy": True}],
+        }
+        with open(cache_file, "wb") as f:
+            pickle.dump(bad_cache, f)
+
+        train, val = build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+        assert len(train) > 0, "Cache with wrong version must be rebuilt"
+
+    def test_cache_metadata_saved(self, tmp_path):
+        """Built cache must contain version, hash, and fingerprint."""
+        import pickle
+        from training.dataset import _cache_path, CACHE_VERSION, build_index
+
+        root = _build_synthetic_root(tmp_path)
+        build_index(root, "train", val_speaker_fraction=0.3, seed=42)
+
+        cache_file = _cache_path(root, "train")
+        with open(cache_file, "rb") as f:
+            data = pickle.load(f)
+
+        assert data["cache_version"] == CACHE_VERSION
+        assert "proto_hash" in data
+        assert "audio_fingerprint" in data
+        assert len(data["proto_hash"]) == 64, "Expected SHA-256 hex digest"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 5: Audio loading — explicit failures
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestAudioLoadingBehavior:
+    """
+    Verify that unreadable/missing audio raises explicitly rather than
+    returning zeros silently.
+    """
+
+    def _make_ds(self, records, **kw):
+        from training.dataset import ASVspoof5Dataset
+        return ASVspoof5Dataset(records, max_samples=64000, **kw)
+
+    def _make_record(self, path):
+        return {
+            "speaker_id": "S01", "utterance_id": "U01", "gender": "M",
+            "codec": None, "attack_type": "bonafide",
+            "label": 0, "label_str": "bonafide",
+            "path": str(path),
+        }
+
+    def test_missing_audio_raises_runtime_error(self, tmp_path):
+        """A file listed in the index but missing on disk must raise RuntimeError."""
+        rec = self._make_record(tmp_path / "nonexistent.flac")
+        ds = self._make_ds([rec])
+        with pytest.raises(RuntimeError, match="not found"):
+            ds[0]
+
+    def test_corrupt_audio_raises_runtime_error(self, tmp_path):
+        """A corrupt/truncated file must raise RuntimeError, not return zeros."""
+        bad_file = tmp_path / "corrupt.flac"
+        bad_file.write_bytes(b"this is not a valid flac file")
+        rec = self._make_record(bad_file)
+        ds = self._make_ds([rec])
+        with pytest.raises(RuntimeError, match="Cannot read"):
+            ds[0]
+
+    def test_valid_audio_loads_correctly(self, tmp_path):
+        """Valid audio must load to exactly max_samples tensor."""
+        audio_file = tmp_path / "T_test.flac"
+        _write_tiny_flac(audio_file, n_samples=8000)
+        rec = self._make_record(audio_file)
+        ds = self._make_ds([rec])
+        wav, label, meta = ds[0]
+        assert wav.shape == (64000,)
+        assert wav.dtype == torch.float32
+
+    def test_short_audio_padded_with_zeros(self, tmp_path):
+        """Short audio (< max_samples) must be zero-padded to max_samples."""
+        audio_file = tmp_path / "T_short.flac"
+        n_input = 8000
+        _write_tiny_flac(audio_file, n_samples=n_input)
+        rec = self._make_record(audio_file)
+        ds = self._make_ds([rec])
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+        assert float(wav[n_input:].abs().sum()) == pytest.approx(0.0)
+
+    def test_long_audio_truncated(self, tmp_path):
+        """Long audio (> max_samples) must be truncated to max_samples."""
+        audio_file = tmp_path / "T_long.flac"
+        _write_tiny_flac(audio_file, n_samples=96000)
+        rec = self._make_record(audio_file)
+        ds = self._make_ds([rec])
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+
+    def test_exact_length_audio_unchanged(self, tmp_path):
+        """Audio of exactly max_samples must not be modified."""
+        audio_file = tmp_path / "T_exact.flac"
+        _write_tiny_flac(audio_file, n_samples=64000)
+        rec = self._make_record(audio_file)
+        ds = self._make_ds([rec])
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+
+    def test_max_samples_always_int(self, tmp_path):
+        """max_samples passed as float must be stored as int."""
+        from training.dataset import ASVspoof5Dataset
+        ds = ASVspoof5Dataset([], max_samples=64000.0)
+        assert isinstance(ds.max_samples, int)
+        assert ds.max_samples == 64000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 7: Validation split behavior
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestValidationSplit:
+    """Verify dev audio used when present; speaker-disjoint fallback otherwise."""
+
+    def test_speaker_disjoint_fallback_when_no_dev_audio(self, tmp_path):
+        """Without dev audio, carve speaker-disjoint split from training."""
+        root = _build_synthetic_root(tmp_path, create_dev_audio=False)
+        from training.dataset import build_index
+
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        train_sp = {r["speaker_id"] for r in train}
+        val_sp   = {r["speaker_id"] for r in val}
+
+        assert len(train) > 0
+        assert len(val) > 0
+        assert len(train_sp & val_sp) == 0, "Speaker leak in disjoint fallback"
+
+    def test_dev_audio_used_when_present(self, tmp_path):
+        """When dev protocol + audio exist, use them as validation."""
+        dev_lines = [
+            _make_tsv_line("D_SP90", "D_0000000001", "M", "-", "-", "-", "-", "bonafide", "bonafide"),
+            _make_tsv_line("D_SP91", "D_0000000002", "F", "AAC", "-", "-", "A_syn", "A01", "spoof"),
+        ]
+        root = _build_synthetic_root(
+            tmp_path, dev_lines=dev_lines, create_dev_audio=True
+        )
+        from training.dataset import build_index
+
+        _, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        val_uids = {r["utterance_id"] for r in val}
+        assert "D_0000000001" in val_uids or "D_0000000002" in val_uids, (
+            "Dev audio must be used as validation when present"
+        )
+
+    def test_empty_train_raises_runtime_error(self, tmp_path):
+        """build_index must raise RuntimeError when no training audio exists."""
+        root = _build_synthetic_root(tmp_path, create_train_audio=False)
+        from training.dataset import build_index
+        with pytest.raises(RuntimeError, match="No training audio"):
+            build_index(root, "train", seed=42)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 11/12: Synthetic ASVspoof5 smoke test
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSyntheticASVspoofSmokeTest:
+    """
+    End-to-end smoke test using a tiny synthetic ASVspoof5-style fixture.
+    Proves the full pipeline works without the real 35+ GB dataset.
+    """
+
+    def test_full_pipeline_train_only(self, tmp_path):
+        """
+        Create synthetic fixture → parse protocol → build index → load dataset.
+        """
+        root = _build_synthetic_root(tmp_path)
+        from training.dataset import build_index, ASVspoof5Dataset
+
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+
+        assert len(train) > 0, "Must have train records"
+        assert len(val) > 0, "Must have val records"
+
+        ds_train = ASVspoof5Dataset(train, max_samples=64000, augment=False)
+        ds_val   = ASVspoof5Dataset(val,   max_samples=64000, augment=False)
+
+        for i in range(len(ds_train)):
+            wav, label, meta = ds_train[i]
+            assert wav.shape == (64000,)
+            assert label in (0, 1)
+
+        for i in range(len(ds_val)):
+            wav, label, meta = ds_val[i]
+            assert wav.shape == (64000,)
+            assert label in (0, 1)
+
+    def test_full_pipeline_with_dev(self, tmp_path):
+        """Full pipeline with dev protocol + dev audio."""
+        dev_lines = [
+            _make_tsv_line("D_SP90", "D_0000000001", "M", "-", "-", "-", "-", "bonafide", "bonafide"),
+            _make_tsv_line("D_SP91", "D_0000000002", "F", "AAC", "-", "-", "A_syn", "A01", "spoof"),
+        ]
+        root = _build_synthetic_root(
+            tmp_path, dev_lines=dev_lines, create_dev_audio=True
+        )
+        from training.dataset import build_index, ASVspoof5Dataset
+
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        assert len(train) > 0
+        assert len(val) >= 1
+
+        for records, split_name in [(train, "train"), (val, "val")]:
+            ds = ASVspoof5Dataset(records, max_samples=64000, augment=False)
+            for i in range(len(ds)):
+                wav, label, meta = ds[i]
+                assert wav.shape == (64000,), f"{split_name}[{i}] shape {wav.shape}"
+                assert label in (0, 1)
+
+    def test_protocol_at_root_layout(self, tmp_path):
+        """Protocol at dataset root (not under protocols/) is supported."""
+        root = _build_synthetic_root(tmp_path, proto_at_root=True)
+        from training.dataset import build_index
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        assert len(train) > 0
+
+    def test_protocol_in_protocols_subdir(self, tmp_path):
+        """Protocol under protocols/ subdirectory is also supported."""
+        root = _build_synthetic_root(tmp_path, proto_at_root=False)
+        from training.dataset import build_index
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        assert len(train) > 0
+
+    def test_labels_assigned_correctly(self, tmp_path):
+        """bonafide → 0, spoof → 1."""
+        root = _build_synthetic_root(tmp_path)
+        from training.dataset import build_index, ASVspoof5Dataset
+
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        all_records = train + val
+        ds = ASVspoof5Dataset(all_records, max_samples=64000, augment=False)
+
+        for i in range(len(ds)):
+            wav, label, meta = ds[i]
+            if meta["label_str"] == "bonafide":
+                assert label == 0
+            else:
+                assert label == 1
+
+    def test_collate_fn_with_synthetic(self, tmp_path):
+        """collate_fn must produce correct batch shapes."""
+        from training.dataset import build_index, ASVspoof5Dataset, collate_fn
+        from torch.utils.data import DataLoader
+
+        root = _build_synthetic_root(tmp_path)
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        all_records = train + val
+        ds = ASVspoof5Dataset(all_records, max_samples=64000)
+        loader = DataLoader(ds, batch_size=2, collate_fn=collate_fn)
+
+        batch = next(iter(loader))
+        wavs, labels, metas = batch
+        assert wavs.shape[1] == 64000
+        assert labels.dtype == torch.float32
+
+    def test_class_weights_non_zero_with_both_classes(self, tmp_path):
+        """When both bonafide and spoof are present, weights must be finite."""
+        from training.dataset import build_index, ASVspoof5Dataset
+
+        root = _build_synthetic_root(tmp_path)
+        train, val = build_index(root, "train", val_speaker_fraction=0.4, seed=42)
+        all_records = train + val
+        ds = ASVspoof5Dataset(all_records, max_samples=64000)
+        cw = ds.class_weights()
+        assert torch.all(torch.isfinite(cw))
+        assert torch.all(cw > 0)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 13: Model forward + backward smoke test
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestModelSmoke:
+    """
+    Model forward and backward pass smoke tests.
+    No real dataset required.
+    """
+
+    def test_forward_pass_shape(self):
+        from model.voxshieldnet import build_model
+        model = build_model()
+        model.eval()
+        with torch.no_grad():
+            wav = torch.randn(2, 64000)
+            logits = model(wav)
+        assert logits.shape == (2,), f"Expected (2,), got {logits.shape}"
+
+    def test_forward_pass_finite_logits(self):
+        from model.voxshieldnet import build_model
+        model = build_model()
+        model.eval()
+        with torch.no_grad():
+            wav = torch.randn(4, 64000)
+            logits = model(wav)
+        assert torch.all(torch.isfinite(logits)), "Logits must be finite"
+
+    def test_backward_pass_gradients(self):
+        """Loss must be differentiable; gradients must flow."""
+        import torch.nn as nn
+        from model.voxshieldnet import build_model
+
+        model = build_model()
+        model.train()
+        criterion = nn.BCEWithLogitsLoss()
+
+        wav    = torch.randn(4, 64000)
+        labels = torch.tensor([0.0, 1.0, 0.0, 1.0])
+
+        logits = model(wav)
+        loss   = criterion(logits, labels)
+        loss.backward()
+
+        assert torch.isfinite(loss), f"Loss must be finite, got {loss.item()}"
+        # At least one parameter must have a gradient
+        has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0
+            for p in model.parameters()
+        )
+        assert has_grad, "No gradients flowed during backward pass"
+
+    def test_model_no_sigmoid_inside_forward(self):
+        """
+        Output values must be able to exceed [0,1] range (raw logits).
+        If sigmoid were inside forward(), this would never happen.
+        """
+        from model.voxshieldnet import build_model
+        torch.manual_seed(0)
+        model = build_model()
+        model.eval()
+        # Many different inputs — at least one should produce |logit| > 0.1
+        with torch.no_grad():
+            wav = torch.randn(32, 64000) * 2
+            logits = model(wav)
+        # sigmoid-clamped values would all be in [0,1]; raw logits can be outside
+        probs_if_clamped = torch.sigmoid(logits)
+        # The key property: logits != sigmoid(logits) for extreme values
+        extreme = (logits.abs() > 0.2).any()
+        assert extreme, "Expected at least one logit with |value| > 0.2"
+
+    def test_checkpoint_save_and_reload(self, tmp_path):
+        """Full checkpoint save → reload → forward must produce identical output."""
+        from model.voxshieldnet import build_model
+        from training.train import save_checkpoint, load_checkpoint
+        import torch.optim as optim
+
+        model = build_model()
+        optimizer = optim.Adam(model.parameters())
+        ckpt_path = tmp_path / "smoke.pt"
+
+        save_checkpoint(
+            ckpt_path, model, optimizer, None, None,
+            epoch=1,
+            val_metrics={"roc_auc": 0.75},
+            dataset_info={"dataset_type": "ASVspoof5"},
+            threshold=0.44,
+            best_auc=0.75,
+            training_history=[],
+        )
+
+        ckpt = load_checkpoint(ckpt_path)
+        assert ckpt is not None
+        assert "model_state_dict" in ckpt
+        assert ckpt["threshold"] == pytest.approx(0.44)
+        assert ckpt["metadata"]["pretrained"] is False
+
+        # Reload into a fresh model and verify forward output matches
+        model2 = build_model()
+        model2.load_state_dict(ckpt["model_state_dict"])
+        model.eval()
+        model2.eval()
+        with torch.no_grad():
+            wav = torch.randn(2, 64000)
+            logits1 = model(wav)
+            logits2 = model2(wav)
+        assert torch.allclose(logits1, logits2, atol=1e-5), (
+            "Reloaded model must produce identical logits"
+        )

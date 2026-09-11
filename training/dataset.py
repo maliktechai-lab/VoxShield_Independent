@@ -6,26 +6,46 @@ Label convention (non-negotiable):
     0 = bonafide  (genuine human speech)
     1 = spoof     (synthetic / converted speech)
 
-Protocol columns (0-indexed):
-    0: speaker_id
-    1: utterance_id
-    2: gender
-    3-5: unused (-)
-    6: codec
-    7: attack_type  ("bonafide" for genuine samples, e.g. "A01"–"An" for spoof)
-    8: label        ("bonafide" | "spoof")
-    9: unused
+Official ASVspoof5 protocol fields (0-indexed, space-separated, 10 columns):
+    0: SPEAKER_ID
+    1: FLAC_FILE_NAME
+    2: SPEAKER_GENDER
+    3: CODEC
+    4: CODEC_Q
+    5: CODEC_SEED
+    6: ATTACK_TAG
+    7: ATTACK_LABEL   ("bonafide" for genuine, e.g. "A01"–"An" for spoof)
+    8: KEY            ("bonafide" | "spoof")
+    9: TMP
 
-Audio directory:
-    <root>/train/flac_T/<utterance_id>.flac   (train set)
-    <root>/dev/flac_D/<utterance_id>.flac     (dev/val set — not always present)
+Official native ASVspoof5 directory layout (after extracting official archives):
 
-    When dev audio is absent, a speaker-disjoint validation split is carved
-    from the training set (default 15 % of speakers).
+    <root>/
+        ASVspoof5.train.tsv               (or protocols/ subdirectory — both supported)
+        flac_T/
+            T_*.flac
+        ASVspoof5.dev.track_1.tsv
+        flac_D/
+            D_*.flac
+        ASVspoof5.eval.track_1.tsv
+        flac_E_eval/
+            E_*.flac
+
+Audio resolution:
+    T_* utterances -> <root>/flac_T/<utterance_id>.flac
+    D_* utterances -> <root>/flac_D/<utterance_id>.flac
+    E_* utterances -> <root>/flac_E_eval/<utterance_id>.flac
 
 Caching:
     An index pickle is written to <root>/.voxshield_cache/ so subsequent
     launches skip file-existence scanning.
+
+    Cache is automatically invalidated and rebuilt if:
+      - the protocol file content changes (SHA-256 hash mismatch)
+      - the expected audio directories change
+      - the record count in the cache is zero
+      - sampled cached paths no longer exist on disk
+      - the cache format version changes
 """
 
 from __future__ import annotations
@@ -52,28 +72,94 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16_000
 MAX_SEC = 4.0
 MAX_SAMPLES = int(SAMPLE_RATE * MAX_SEC)
-CACHE_VERSION = "v3"
+
+# Increment this string whenever the cache schema or index logic changes.
+# A different value forces every existing cache file to be rebuilt.
+CACHE_VERSION = "v4"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Index building
+# Protocol discovery — supports both flat root and protocols/ subdirectory
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _find_protocol(dataset_dir: Path, filename: str) -> Optional[Path]:
+    """
+    Locate an ASVspoof5 protocol file.
+
+    Checks the official native flat layout first (file at dataset root),
+    then falls back to a protocols/ subdirectory for backward compatibility.
+
+    Returns the Path if found, or None.
+    """
+    # Native/official: TSV at root level
+    candidate = dataset_dir / filename
+    if candidate.exists():
+        return candidate
+    # Legacy / alternate layout: protocols/ subdirectory
+    candidate = dataset_dir / "protocols" / filename
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _require_protocol(dataset_dir: Path, filename: str) -> Path:
+    """Like _find_protocol but raises FileNotFoundError if not found."""
+    p = _find_protocol(dataset_dir, filename)
+    if p is None:
+        raise FileNotFoundError(
+            f"Protocol file '{filename}' not found in:\n"
+            f"  {dataset_dir / filename}\n"
+            f"  {dataset_dir / 'protocols' / filename}\n"
+            "Check that the ASVspoof5 dataset is correctly extracted."
+        )
+    return p
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Protocol parsing
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_protocol(tsv_path: Path) -> List[Dict]:
-    """Parse a single ASVspoof5 .tsv protocol file into a list of records."""
+    """
+    Parse a single ASVspoof5 .tsv protocol file into a list of records.
+
+    Official field layout (10 space-separated columns):
+        0  SPEAKER_ID
+        1  FLAC_FILE_NAME
+        2  SPEAKER_GENDER
+        3  CODEC          ("-" for bonafide)
+        4  CODEC_Q
+        5  CODEC_SEED
+        6  ATTACK_TAG
+        7  ATTACK_LABEL   ("bonafide" or e.g. "A05")
+        8  KEY            ("bonafide" | "spoof")
+        9  TMP
+    """
     records: List[Dict] = []
-    with open(tsv_path, "r") as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) < 9:
+    with open(tsv_path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
                 continue
+            parts = line.split()
+            if len(parts) < 9:
+                logger.warning(
+                    f"{tsv_path}:{lineno}: expected ≥9 fields, got {len(parts)} — skipping"
+                )
+                continue
+
             speaker_id   = parts[0]
             utterance_id = parts[1]
             gender       = parts[2]
-            codec        = parts[6] if parts[6] != "-" else None
-            attack_type  = parts[7]  # "bonafide" or e.g. "A05"
-            label_str    = parts[8]  # "bonafide" or "spoof"
+            # Field 3 is CODEC (not field 6 — fields 4 and 5 are codec_quality
+            # and codec_seed, which are "-" for bonafide utterances)
+            codec        = parts[3] if parts[3] != "-" else None
+            # Field 7 is the attack label ("bonafide" or "A01" etc.)
+            attack_type  = parts[7]
+            # Field 8 is the key ("bonafide" | "spoof")
+            label_str    = parts[8]
             label = 0 if label_str == "bonafide" else 1
+
             records.append({
                 "speaker_id":   speaker_id,
                 "utterance_id": utterance_id,
@@ -86,26 +172,127 @@ def _parse_protocol(tsv_path: Path) -> List[Dict]:
     return records
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Audio path resolution
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _find_audio(root: Path, utterance_id: str) -> Optional[Path]:
-    """Locate the audio file for a given utterance_id."""
-    # Train prefix T_, dev prefix D_
+    """
+    Locate the .flac file for a given utterance_id using the native
+    official ASVspoof5 directory layout.
+
+    Layout:
+        T_* -> <root>/flac_T/<utterance_id>.flac   (training set)
+        D_* -> <root>/flac_D/<utterance_id>.flac   (development set)
+        E_* -> <root>/flac_E_eval/<utterance_id>.flac  (evaluation set)
+
+    Does NOT require artificial train/ or dev/ subdirectories.
+    """
     if utterance_id.startswith("T_"):
-        candidate = root / "train" / "flac_T" / f"{utterance_id}.flac"
+        candidate = root / "flac_T" / f"{utterance_id}.flac"
     elif utterance_id.startswith("D_"):
-        # dev audio may not always be present
-        candidate = root / "dev" / "flac_D" / f"{utterance_id}.flac"
+        candidate = root / "flac_D" / f"{utterance_id}.flac"
+    elif utterance_id.startswith("E_"):
+        candidate = root / "flac_E_eval" / f"{utterance_id}.flac"
     else:
+        # Fallback: try at root level
         candidate = root / f"{utterance_id}.flac"
     return candidate if candidate.exists() else None
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Cache helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _protocol_hash(proto_path: Path) -> str:
+    """Return the SHA-256 hex digest of a protocol file's contents."""
+    h = hashlib.sha256()
+    with open(proto_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _audio_dir_fingerprint(root: Path) -> str:
+    """
+    Return a lightweight fingerprint of the audio directories present.
+    Encodes which flac_* directories exist under root and their file counts.
+    """
+    dirs = ["flac_T", "flac_D", "flac_E_eval"]
+    parts = []
+    for d in dirs:
+        p = root / d
+        if p.exists():
+            count = sum(1 for _ in p.glob("*.flac"))
+            parts.append(f"{d}={count}")
+        else:
+            parts.append(f"{d}=absent")
+    return "|".join(parts)
+
+
 def _cache_path(dataset_dir: Path, split: str) -> Path:
-    """Return path for the dataset index cache."""
+    """Return the path for the dataset index cache file."""
     key = hashlib.md5(str(dataset_dir.resolve()).encode()).hexdigest()[:8]
     cache_dir = dataset_dir / ".voxshield_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"index_{CACHE_VERSION}_{split}_{key}.pkl"
 
+
+def _validate_cache(
+    data: dict,
+    dataset_dir: Path,
+    proto_hash: str,
+    audio_fingerprint: str,
+    n_probe: int = 20,
+) -> Tuple[bool, str]:
+    """
+    Validate a loaded cache dict.
+
+    Returns (is_valid, reason_if_invalid).
+
+    Checks:
+      1. cache format version matches
+      2. protocol content hash matches (detects changed protocol)
+      3. audio directory fingerprint matches (detects moved/added audio)
+      4. train + val record counts are non-zero
+      5. a random sample of cached paths still exist on disk
+    """
+    # 1. Version
+    if data.get("cache_version") != CACHE_VERSION:
+        return False, f"cache_version mismatch: {data.get('cache_version')} != {CACHE_VERSION}"
+
+    # 2. Protocol hash
+    if data.get("proto_hash") != proto_hash:
+        return False, "protocol file content changed"
+
+    # 3. Audio fingerprint
+    if data.get("audio_fingerprint") != audio_fingerprint:
+        return False, f"audio directory fingerprint changed: {data.get('audio_fingerprint')} -> {audio_fingerprint}"
+
+    # 4. Non-empty
+    train_recs = data.get("train", [])
+    val_recs   = data.get("val",   [])
+    if not train_recs:
+        return False, "cached train records is empty"
+
+    # 5. Path existence probe
+    all_paths = [r["path"] for r in train_recs] + [r["path"] for r in val_recs]
+    if all_paths:
+        rng = random.Random(42)
+        sample = rng.sample(all_paths, min(n_probe, len(all_paths)))
+        missing = [p for p in sample if not Path(p).exists()]
+        if missing:
+            return False, (
+                f"{len(missing)} of {len(sample)} probed cached paths no longer exist "
+                f"(e.g. {missing[0]})"
+            )
+
+    return True, ""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Index building
+# ──────────────────────────────────────────────────────────────────────────────
 
 def build_index(
     dataset_dir: Path,
@@ -122,25 +309,42 @@ def build_index(
 
     Returns lists of dicts with keys:
         path, speaker_id, utterance_id, gender, codec, attack_type, label, label_str
+
+    Raises RuntimeError if train_records is empty after indexing.
     """
+    train_proto_path = _require_protocol(dataset_dir, "ASVspoof5.train.tsv")
+    dev_proto_path   = _find_protocol(dataset_dir, "ASVspoof5.dev.track_1.tsv")
+
+    # Compute metadata for cache validation
+    proto_hash       = _protocol_hash(train_proto_path)
+    audio_fingerprint = _audio_dir_fingerprint(dataset_dir)
+
     cache_file = _cache_path(dataset_dir, split)
+
     if not force_rebuild and cache_file.exists():
-        logger.info(f"Loading cached index from {cache_file}")
-        with open(cache_file, "rb") as f:
-            data = pickle.load(f)
-        return data["train"], data["val"]
+        try:
+            with open(cache_file, "rb") as f:
+                data = pickle.load(f)
+            valid, reason = _validate_cache(
+                data, dataset_dir, proto_hash, audio_fingerprint
+            )
+            if valid:
+                logger.info(f"Cache valid — loaded from {cache_file}")
+                logger.info(
+                    f"  train={len(data['train']):,}  val={len(data['val']):,}"
+                )
+                return data["train"], data["val"]
+            else:
+                logger.warning(f"Cache invalid ({reason}) — rebuilding ...")
+        except Exception as e:
+            logger.warning(f"Cache unreadable ({e}) — rebuilding ...")
 
     logger.info(f"Building dataset index from {dataset_dir} ...")
-
-    train_proto = dataset_dir / "protocols" / "ASVspoof5.train.tsv"
-    dev_proto   = dataset_dir / "protocols" / "ASVspoof5.dev.track_1.tsv"
-
-    if not train_proto.exists():
-        raise FileNotFoundError(f"Training protocol not found: {train_proto}")
+    logger.info(f"  Protocol : {train_proto_path}")
 
     # ── Parse training records ────────────────────────────────────────────────
-    train_raw = _parse_protocol(train_proto)
-    logger.info(f"Protocol: {len(train_raw):,} raw training entries")
+    train_raw = _parse_protocol(train_proto_path)
+    logger.info(f"  Protocol entries: {len(train_raw):,}")
 
     train_records: List[Dict] = []
     missing = 0
@@ -152,44 +356,87 @@ def build_index(
         train_records.append({**r, "path": str(audio_path)})
 
     if missing:
-        logger.warning(f"Skipped {missing:,} training entries (audio not found)")
-    logger.info(f"Resolved {len(train_records):,} training audio files")
+        logger.warning(
+            f"  {missing:,} training protocol entries had no matching audio file"
+        )
+    logger.info(f"  Resolved {len(train_records):,} training audio files")
+
+    if not train_records:
+        raise RuntimeError(
+            f"No training audio files resolved from {dataset_dir}.\n"
+            f"Expected to find .flac files under {dataset_dir / 'flac_T'}.\n"
+            f"Protocol: {train_proto_path} ({len(train_raw):,} entries).\n"
+            "Check that the ASVspoof5 training archives (flac_T_aa.tar … flac_T_ae.tar) "
+            "have been extracted into the dataset root directory."
+        )
 
     # ── Validation split ──────────────────────────────────────────────────────
     val_records: List[Dict] = []
 
-    if dev_proto.exists():
-        dev_raw = _parse_protocol(dev_proto)
+    if dev_proto_path is not None:
+        dev_raw = _parse_protocol(dev_proto_path)
+        # Probe a handful of entries to see if dev audio is present
         dev_has_audio = False
-        for r in dev_raw[:20]:  # probe
+        for r in dev_raw[:20]:
             if _find_audio(dataset_dir, r["utterance_id"]) is not None:
                 dev_has_audio = True
                 break
 
         if dev_has_audio:
-            logger.info("Dev protocol + audio found — using as validation set")
+            logger.info(
+                f"Dev protocol found ({dev_proto_path.name}) with audio "
+                f"— using as validation set"
+            )
+            dev_missing = 0
             for r in dev_raw:
                 audio_path = _find_audio(dataset_dir, r["utterance_id"])
                 if audio_path is not None:
                     val_records.append({**r, "path": str(audio_path)})
-            logger.info(f"Resolved {len(val_records):,} validation (dev) audio files")
+                else:
+                    dev_missing += 1
+            if dev_missing:
+                logger.warning(
+                    f"  {dev_missing:,} dev protocol entries had no matching audio"
+                )
+            logger.info(f"  Resolved {len(val_records):,} validation (dev) audio files")
+        else:
+            logger.info(
+                f"Dev protocol found ({dev_proto_path.name}) but no dev audio "
+                "detected in flac_D/ — falling back to speaker-disjoint split"
+            )
 
     if not val_records:
         logger.info(
-            f"Dev audio not found. Carving {val_speaker_fraction:.0%} "
-            "speaker-disjoint validation from training data."
+            f"Carving {val_speaker_fraction:.0%} speaker-disjoint validation "
+            "split from training data."
         )
         train_records, val_records = _speaker_disjoint_split(
             train_records, val_speaker_fraction, seed
         )
 
-    # ── Save cache ────────────────────────────────────────────────────────────
-    with open(cache_file, "wb") as f:
-        pickle.dump({"train": train_records, "val": val_records}, f)
-    logger.info(
-        f"Index cached: {len(train_records):,} train, "
-        f"{len(val_records):,} val → {cache_file}"
-    )
+    if not val_records:
+        raise RuntimeError(
+            "Validation set is empty after attempting both dev audio and "
+            "speaker-disjoint fallback. Cannot train without validation data."
+        )
+
+    # ── Save cache with metadata ──────────────────────────────────────────────
+    cache_data = {
+        "cache_version":    CACHE_VERSION,
+        "proto_hash":       proto_hash,
+        "audio_fingerprint": audio_fingerprint,
+        "train":            train_records,
+        "val":              val_records,
+    }
+    try:
+        with open(cache_file, "wb") as f:
+            pickle.dump(cache_data, f)
+        logger.info(
+            f"  Index cached: {len(train_records):,} train, "
+            f"{len(val_records):,} val → {cache_file}"
+        )
+    except Exception as e:
+        logger.warning(f"Could not write cache ({e}) — continuing without cache")
 
     return train_records, val_records
 
@@ -222,10 +469,18 @@ class ASVspoof5Dataset(Dataset):
     """
     PyTorch Dataset for ASVspoof5.
 
-    Loads .flac audio via soundfile (torchaudio 2.11 requires this backend).
+    Loads .flac audio via soundfile.
     Returns fixed-length 16 kHz mono waveforms.
 
     Label: 0 = bonafide, 1 = spoof.
+
+    Audio loading behaviour:
+      - If audio is shorter than max_samples, it is zero-padded.
+      - If audio is longer than max_samples, it is clipped (random crop
+        during augmentation, deterministic head-crop otherwise).
+      - If audio is genuinely unreadable/corrupt, a RuntimeError is raised
+        with the file path so the problem is visible and actionable.
+        Training infrastructure must decide whether to skip or abort.
     """
 
     def __init__(
@@ -276,12 +531,28 @@ class ASVspoof5Dataset(Dataset):
         return wav, rec["label"], meta
 
     def _load_audio(self, path: str) -> torch.Tensor:
-        """Load .flac using soundfile, resample if needed, fix length."""
+        """
+        Load .flac using soundfile, resample if needed, fix length.
+
+        Raises RuntimeError for corrupt/unreadable files.
+        Padding is always zero-padding for short files (normal behaviour).
+        """
+        if not Path(path).exists():
+            raise RuntimeError(
+                f"Audio file not found: {path}\n"
+                "This path was resolved during indexing but no longer exists. "
+                "Re-run with --force-rebuild-index to refresh the index."
+            )
+
         try:
             data, sr = sf.read(path, dtype="float32")
         except Exception as e:
-            logger.warning(f"Failed to load {path}: {e}. Returning silence.")
-            return torch.zeros(self.max_samples)
+            raise RuntimeError(
+                f"Cannot read audio file: {path}\n"
+                f"Error: {e}\n"
+                "The file may be corrupt or truncated. "
+                "Do not silently use zeros — this hides dataset problems."
+            ) from e
 
         # Mono
         if data.ndim > 1:
@@ -297,13 +568,14 @@ class ASVspoof5Dataset(Dataset):
         # Clip or pad
         n = wav.shape[0]
         if n >= self.max_samples:
-            # Random crop during training for augmentation
+            # Random crop during training augmentation
             if self.augment and n > self.max_samples:
                 start = int(self._rng.integers(0, n - self.max_samples))
                 wav = wav[start: start + self.max_samples]
             else:
                 wav = wav[: self.max_samples]
         else:
+            # Zero-pad (normal — many utterances are shorter than 4 s)
             wav = torch.nn.functional.pad(wav, (0, self.max_samples - n))
 
         return wav  # shape: (max_samples,)
