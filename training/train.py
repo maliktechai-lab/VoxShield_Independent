@@ -251,8 +251,7 @@ def train(args: argparse.Namespace) -> None:
 
     train_ds = ASVspoof5Dataset(
         train_records,
-        max_samples=MODEL_CONFIG["max_length_sec"] * MODEL_CONFIG["sample_rate"]
-        if hasattr(MODEL_CONFIG, "__getitem__") else 64000,
+        max_samples=int(MODEL_CONFIG["max_length_sec"] * MODEL_CONFIG["sample_rate"]),
         augment=True,
         seed=args.seed,
     )

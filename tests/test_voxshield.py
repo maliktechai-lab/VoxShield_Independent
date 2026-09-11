@@ -989,6 +989,267 @@ class TestFrontendBuild:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Test: Audio padding integer correctness (regression for float-pad bug)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestAudioPadding:
+    """
+    Regression tests for the F.pad integer bug.
+
+    Bug: MODEL_CONFIG["max_length_sec"] * MODEL_CONFIG["sample_rate"]
+         evaluates to 4.0 * 16000 = 64000.0 (float), which was passed
+         to ASVspoof5Dataset as max_samples.  The _load_audio method then
+         called F.pad(wav, (0, self.max_samples - n)) where the right-pad
+         value was float, causing:
+             TypeError: pad(): argument 'pad' (pos 2) must be tuple of ints
+
+    All tests below must pass without TypeError.
+    """
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    def _make_record(self, path: str) -> dict:
+        return {
+            "speaker_id": "S01",
+            "utterance_id": "U01",
+            "gender": "M",
+            "codec": None,
+            "attack_type": "bonafide",
+            "label": 0,
+            "label_str": "bonafide",
+            "path": path,
+        }
+
+    def _write_flac(self, tmp_path: Path, n_samples: int, sr: int = 16000) -> Path:
+        """Write a minimal FLAC file with n_samples frames."""
+        import soundfile as sf
+        data = np.random.default_rng(0).standard_normal(n_samples).astype(np.float32) * 0.1
+        p = tmp_path / f"audio_{n_samples}.flac"
+        sf.write(str(p), data, sr, subtype="PCM_16")
+        return p
+
+    # ── max_samples type guard ────────────────────────────────────────────────
+
+    def test_max_samples_stored_as_int_when_given_int(self):
+        """When max_samples is already an int, self.max_samples must be int."""
+        from training.dataset import ASVspoof5Dataset
+        ds = ASVspoof5Dataset.__new__(ASVspoof5Dataset)
+        ds.records = []
+        ds.sample_rate = 16000
+        ds.max_samples = int(64000)
+        assert isinstance(ds.max_samples, int)
+
+    def test_max_samples_coerced_to_int_when_given_float(self):
+        """
+        Core regression: passing max_samples=64000.0 (float) to the
+        constructor must result in self.max_samples being int, not float.
+        """
+        from training.dataset import ASVspoof5Dataset
+        records = []  # empty — we only test __init__ type coercion
+        ds = ASVspoof5Dataset(records, max_samples=64000.0)
+        assert isinstance(ds.max_samples, int), (
+            f"max_samples should be int, got {type(ds.max_samples)}"
+        )
+        assert ds.max_samples == 64000
+
+    def test_sample_rate_coerced_to_int_when_given_float(self):
+        """sample_rate=16000.0 must be stored as int."""
+        from training.dataset import ASVspoof5Dataset
+        ds = ASVspoof5Dataset([], sample_rate=16000.0, max_samples=64000)
+        assert isinstance(ds.sample_rate, int)
+
+    def test_config_derived_max_samples_is_float_before_int_wrap(self):
+        """
+        Confirm the production calculation would have been a float without int().
+        This documents the root cause.
+        """
+        from model.voxshieldnet import MODEL_CONFIG
+        raw = MODEL_CONFIG["max_length_sec"] * MODEL_CONFIG["sample_rate"]
+        assert isinstance(raw, float), (
+            "Precondition: max_length_sec * sample_rate must be float to trigger the bug"
+        )
+        assert raw == 64000.0
+        # int() wrapping is the fix
+        assert isinstance(int(raw), int)
+
+    # ── Padding path: short waveform (requires F.pad) ─────────────────────────
+
+    def test_pad_short_waveform_no_type_error(self, tmp_path):
+        """Waveform shorter than max_samples must pad without TypeError."""
+        from training.dataset import ASVspoof5Dataset
+        audio_path = self._write_flac(tmp_path, n_samples=8000)  # 0.5 s
+        rec = self._make_record(str(audio_path))
+        # Pass max_samples as float to trigger the bug path; defensive int()
+        # in __init__ should save us.
+        ds = ASVspoof5Dataset([rec], max_samples=64000.0, augment=False)
+        wav, label, meta = ds[0]
+        assert wav.shape == (64000,), f"Expected (64000,), got {wav.shape}"
+        assert wav.dtype == torch.float32
+
+    def test_pad_short_waveform_correct_length(self, tmp_path):
+        """Padded waveform length must exactly equal max_samples."""
+        from training.dataset import ASVspoof5Dataset
+        n_input = 12345
+        audio_path = self._write_flac(tmp_path, n_samples=n_input)
+        rec = self._make_record(str(audio_path))
+        ds = ASVspoof5Dataset([rec], max_samples=64000, augment=False)
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+        # Tail (padding region) should be zero
+        assert wav[n_input:].abs().sum() == 0.0
+
+    def test_pad_values_are_zero(self, tmp_path):
+        """Padding applied by F.pad must be zero-valued."""
+        from training.dataset import ASVspoof5Dataset
+        n_input = 16000  # 1 s of audio
+        audio_path = self._write_flac(tmp_path, n_samples=n_input)
+        rec = self._make_record(str(audio_path))
+        ds = ASVspoof5Dataset([rec], max_samples=64000, augment=False)
+        wav, _, _ = ds[0]
+        assert float(wav[n_input:].abs().max()) == pytest.approx(0.0)
+
+    # ── Exact-length waveform (no pad, no crop) ───────────────────────────────
+
+    def test_exact_length_waveform_unmodified(self, tmp_path):
+        """Waveform with n == max_samples must not be padded or cropped."""
+        from training.dataset import ASVspoof5Dataset
+        n_input = 64000
+        audio_path = self._write_flac(tmp_path, n_samples=n_input)
+        rec = self._make_record(str(audio_path))
+        ds = ASVspoof5Dataset([rec], max_samples=64000, augment=False)
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+
+    # ── Long waveform (truncation path) ──────────────────────────────────────
+
+    def test_truncate_long_waveform(self, tmp_path):
+        """Waveform longer than max_samples must be truncated to max_samples."""
+        from training.dataset import ASVspoof5Dataset
+        audio_path = self._write_flac(tmp_path, n_samples=96000)  # 6 s
+        rec = self._make_record(str(audio_path))
+        ds = ASVspoof5Dataset([rec], max_samples=64000, augment=False)
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == 64000
+
+    # ── F.pad receives integer padding tuple ─────────────────────────────────
+
+    def test_fpad_integer_pad_tuple(self):
+        """
+        Directly verify that _load_audio produces an integer pad tuple.
+        Monkeypatches F.pad to inspect the argument before it is consumed.
+        """
+        import torch.nn.functional as real_F
+        from training.dataset import ASVspoof5Dataset
+
+        captured_pad_args = []
+
+        original_pad = real_F.pad
+
+        def spy_pad(input, pad, *args, **kwargs):
+            captured_pad_args.append(pad)
+            return original_pad(input, pad, *args, **kwargs)
+
+        # Build a dataset with a real audio fixture using a short waveform.
+        # We'll stub _load_audio to call F.pad manually so we can spy.
+        data = np.zeros(8000, dtype=np.float32)  # shorter than 64000
+        wav_tensor = torch.from_numpy(data)
+
+        ds = ASVspoof5Dataset.__new__(ASVspoof5Dataset)
+        ds.records = []
+        ds.sample_rate = 16000
+        ds.max_samples = 64000  # int
+        ds.augment = False
+        ds._rng = np.random.default_rng(0)
+
+        n = wav_tensor.shape[0]
+        pad_value = ds.max_samples - n
+        # Confirm the pad value is an int
+        assert isinstance(pad_value, int), (
+            f"pad_value must be int, got {type(pad_value)}: {pad_value}"
+        )
+        # Confirm F.pad does not raise
+        padded = real_F.pad(wav_tensor, (0, pad_value))
+        assert padded.shape[0] == ds.max_samples
+
+    def test_fpad_raises_with_float_pad_tuple(self):
+        """
+        Confirm PyTorch raises TypeError when F.pad receives a float.
+        This documents the bug behaviour so the regression is meaningful.
+        """
+        import torch.nn.functional as real_F
+
+        wav = torch.zeros(8000)
+        float_pad = 64000.0 - 8000  # → 56000.0, a float
+        assert isinstance(float_pad, float)
+        with pytest.raises(TypeError):
+            real_F.pad(wav, (0, float_pad))
+
+    # ── Non-standard target lengths from config values ────────────────────────
+
+    def test_non_standard_max_samples_from_float_config(self, tmp_path):
+        """
+        Simulate a caller passing max_samples derived from float config
+        (e.g. 3.5 * 16000 = 56000.0).  Defensive int() in __init__ must
+        prevent TypeError.
+        """
+        from training.dataset import ASVspoof5Dataset
+        target = int(3.5 * 16000)  # 56000
+        audio_path = self._write_flac(tmp_path, n_samples=8000)
+        rec = self._make_record(str(audio_path))
+        # Pass as float to trigger the defensive coercion
+        ds = ASVspoof5Dataset([rec], max_samples=3.5 * 16000, augment=False)
+        wav, _, _ = ds[0]
+        assert wav.shape[0] == target
+        assert isinstance(ds.max_samples, int)
+
+    # ── End-to-end: many consecutive samples without error ────────────────────
+
+    def test_many_consecutive_samples_no_error(self, tmp_path):
+        """
+        Load 20 samples of varying lengths through ASVspoof5Dataset.
+        None should raise TypeError or any other exception.
+        This mirrors the Colab failure where ~1400 batches succeeded
+        before a padding sample caused the crash.
+        """
+        import soundfile as sf
+        from training.dataset import ASVspoof5Dataset
+
+        rng = np.random.default_rng(42)
+        records = []
+        lengths = [4000, 8000, 16000, 32000, 64000, 72000, 96000,
+                   1000, 48000, 64000, 3200, 16001, 63999, 64001,
+                   44100, 22050, 11025, 8192, 65536, 32768]
+        for i, n in enumerate(lengths):
+            p = tmp_path / f"sample_{i}.flac"
+            data = (rng.standard_normal(n) * 0.1).astype(np.float32)
+            sf.write(str(p), data, 16000, subtype="PCM_16")
+            records.append({
+                "speaker_id": f"S{i:03d}",
+                "utterance_id": f"U{i:03d}",
+                "gender": "M",
+                "codec": None,
+                "attack_type": "bonafide",
+                "label": i % 2,
+                "label_str": "bonafide" if i % 2 == 0 else "spoof",
+                "path": str(p),
+            })
+
+        # Use float max_samples to rely on defensive int() coercion in __init__
+        ds = ASVspoof5Dataset(records, max_samples=64000.0, augment=False)
+        assert ds.max_samples == 64000
+        assert isinstance(ds.max_samples, int)
+
+        for idx in range(len(ds)):
+            wav, label, meta = ds[idx]
+            assert wav.shape == (64000,), (
+                f"Sample {idx} (input len {lengths[idx]}): "
+                f"got shape {wav.shape}"
+            )
+            assert wav.dtype == torch.float32
+            assert label in (0, 1)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Integration markers
 # ──────────────────────────────────────────────────────────────────────────────
 

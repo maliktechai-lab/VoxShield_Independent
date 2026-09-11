@@ -237,8 +237,11 @@ class ASVspoof5Dataset(Dataset):
         seed: int = 42,
     ):
         self.records = records
-        self.sample_rate = sample_rate
-        self.max_samples = max_samples
+        self.sample_rate = int(sample_rate)
+        # Coerce to int: config values such as max_length_sec * sample_rate
+        # produce a float (e.g. 4.0 * 16000 = 64000.0) which would cause
+        # F.pad to receive a float tuple and raise TypeError.
+        self.max_samples = int(max_samples)
         self.augment = augment
         self._rng = np.random.default_rng(seed)
 
@@ -246,11 +249,14 @@ class ASVspoof5Dataset(Dataset):
         labels = [r["label"] for r in records]
         n_bf = sum(1 for l in labels if l == 0)
         n_sp = sum(1 for l in labels if l == 1)
-        logger.info(
-            f"Dataset: {len(records):,} samples | "
-            f"bonafide={n_bf:,} ({n_bf/len(records):.1%}) | "
-            f"spoof={n_sp:,} ({n_sp/len(records):.1%})"
-        )
+        if len(records) > 0:
+            logger.info(
+                f"Dataset: {len(records):,} samples | "
+                f"bonafide={n_bf:,} ({n_bf/len(records):.1%}) | "
+                f"spoof={n_sp:,} ({n_sp/len(records):.1%})"
+            )
+        else:
+            logger.info("Dataset: 0 samples")
 
     def __len__(self) -> int:
         return len(self.records)
