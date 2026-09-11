@@ -1,0 +1,83 @@
+# VoxShield .gitignore
+# ====================
+# Audio datasets and model weights are NOT committed to Git.
+# Use cloud storage or a data registry for large files.
+
+# ── Dataset directories (NEVER commit) ────────────────────────────────────────
+dataset/
+dataset_real/
+data/
+datasets/
+ASVspoof*/
+
+# ── Audio files ───────────────────────────────────────────────────────────────
+*.flac
+*.wav
+*.mp3
+*.ogg
+*.m4a
+*.mp4
+*.opus
+*.webm
+
+# ── Model checkpoints ─────────────────────────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.bin
+checkpoints/
+!checkpoints/.gitkeep
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+
+# ── Database / logs ───────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ── Reports (generated, not source) ──────────────────────────────────────────
+reports/
+!reports/.gitkeep
+
+# ── Temporary files ───────────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.iml
+
+# ── Dataset cache ─────────────────────────────────────────────────────────────
+.voxshield_cache/
+*/.voxshield_cache/
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+.coverage
+htmlcov/
+coverage.xml

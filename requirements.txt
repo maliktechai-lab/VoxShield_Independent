@@ -1,0 +1,40 @@
+# VoxShield Independent — Python Dependencies
+# =============================================
+#
+# Install: pip install -r requirements.txt
+#
+# No pretrained speech encoders.
+# No external AI inference APIs.
+# All inference runs locally.
+
+# ── Deep Learning (CPU build by default) ──────────────────────────────────────
+# For CUDA, install the CUDA build manually:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# ── Audio processing ──────────────────────────────────────────────────────────
+soundfile>=0.12.1          # Primary audio loading backend (FLAC/WAV/OGG)
+scipy>=1.10.0              # Fallback audio operations + wavfile
+
+# ── Machine learning utilities ────────────────────────────────────────────────
+numpy>=1.24.0
+scikit-learn>=1.3.0        # ROC-AUC, EER computation
+
+# ── Backend ───────────────────────────────────────────────────────────────────
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6    # multipart file upload support
+aiofiles>=23.0.0
+pydantic>=2.0.0
+
+# ── Progress bars ─────────────────────────────────────────────────────────────
+tqdm>=4.65.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+httpx>=0.25.0              # async test client for FastAPI
+
+# ── Optional (for development) ───────────────────────────────────────────────
+# python-dotenv>=1.0.0     # .env file support
