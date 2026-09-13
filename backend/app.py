@@ -65,7 +65,8 @@ EXPOSE_PATHS = os.environ.get("VOXSHIELD_EXPOSE_PATHS", "false").strip().lower()
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
-        "VOXSHIELD_CORS_ORIGINS", "http://localhost:5173"
+        "VOXSHIELD_CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:5173",
     ).split(",")
     if origin.strip()
 ]

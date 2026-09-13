@@ -33,9 +33,22 @@ export const api = {
   incidentStats: ()  => apiFetch('/incidents/stats'),
   timeline: (n = 20) => apiFetch(`/incidents/timeline?n=${n}`),
 
+  /** Upload prediction — used by the manual upload panel. */
   predict: (file) => {
     const form = new FormData()
     form.append('file', file)
+    return apiFetch('/predict', { method: 'POST', body: form })
+  },
+
+  /**
+   * Live mic prediction — same backend endpoint but passes session_id
+   * so live-session incidents are distinguishable in the incident log
+   * (filename prefix "live_mic_" also serves as a secondary marker).
+   */
+  predictLive: (file, sessionId) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (sessionId) form.append('session_id', sessionId)
     return apiFetch('/predict', { method: 'POST', body: form })
   },
 }
