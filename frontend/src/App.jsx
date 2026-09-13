@@ -32,8 +32,15 @@ function fmt(v, d = 4) {
 }
 
 function pct(v) {
-  if (v === null || v === undefined) return '—'
-  return (v * 100).toFixed(1) + '%'
+  if (v === null || v === undefined) return 'N/A'
+  return (v * 100).toFixed(2) + '%'
+}
+
+function probabilityPct(v) {
+  if (v === null || v === undefined) return 'N/A'
+  if (v <= 0) return '<0.01%'
+  if (v >= 1) return '>99.99%'
+  return (v * 100).toFixed(2) + '%'
 }
 
 function shortTs(ts) {
@@ -460,7 +467,7 @@ function ResultPanel({ result }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Spoof Probability</span>
             <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--red)' }}>
-              {pct(spoofP)}
+              {probabilityPct(spoofP)}
             </span>
           </div>
           <ProbBar value={spoofP} color="var(--red)" />
@@ -471,7 +478,7 @@ function ResultPanel({ result }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bona-Fide Probability</span>
             <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--green)' }}>
-              {pct(bfP)}
+              {probabilityPct(bfP)}
             </span>
           </div>
           <ProbBar value={bfP} color="var(--green)" />
@@ -481,7 +488,7 @@ function ResultPanel({ result }) {
       {/* Metrics grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         {[
-          { label: 'Confidence',  value: pct(result.confidence) },
+          { label: 'Confidence',  value: probabilityPct(result.confidence) },
           { label: 'Risk Score',  value: fmt(result.risk_score, 3) },
           { label: 'Threshold',   value: fmt(result.decision_threshold, 4) },
           { label: 'Latency',     value: `${fmt(result.latency_ms, 1)} ms` },
@@ -710,7 +717,7 @@ function TimelinePanel({ timeline }) {
               </div>
               <span style={{ color, fontFamily: 'var(--font-mono)', fontSize: 10, minWidth: 36, textAlign: 'right' }}>
                 {ev.spoof_prob !== null && ev.spoof_prob !== undefined
-                  ? `${(ev.spoof_prob * 100).toFixed(0)}%`
+                  ? probabilityPct(ev.spoof_prob)
                   : '—'
                 }
               </span>
@@ -774,7 +781,7 @@ function IncidentsPanel({ incidents }) {
                 </td>
                 <td style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
                   {inc.spoof_prob !== null && inc.spoof_prob !== undefined
-                    ? `${(inc.spoof_prob * 100).toFixed(1)}%`
+                    ? probabilityPct(inc.spoof_prob)
                     : '—'
                   }
                 </td>

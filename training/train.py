@@ -338,9 +338,9 @@ def train(args: argparse.Namespace) -> None:
     logger.info(model.summary())
 
     # ── Loss (class-weighted BCE) ─────────────────────────────────────────────
-    cw = train_ds.class_weights()
-    pos_weight = torch.tensor([cw[1] / cw[0]], device=device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # WeightedRandomSampler already balances class exposure.
+    # Use standard BCE to avoid double-compensating class imbalance.
+    criterion = nn.BCEWithLogitsLoss()
 
     # ── Optimizer + Scheduler ─────────────────────────────────────────────────
     optimizer = torch.optim.AdamW(
@@ -348,7 +348,7 @@ def train(args: argparse.Namespace) -> None:
     )
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=args.lr * 10,
+        max_lr=args.lr,
         steps_per_epoch=len(train_loader),
         epochs=args.epochs,
         pct_start=0.1,
