@@ -24,6 +24,7 @@ Security:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -39,14 +40,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from contextlib import asynccontextmanager
 from fastapi import (
-    FastAPI, File, Form, HTTPException, Request, UploadFile, status
+    Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from inference.engine import get_engine, reload_engine
 from inference.preprocessor import AudioPreprocessor, AudioPreprocessorError
 from backend.incident_logger import get_incident_logger
+from backend.security import require_api_key
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -54,6 +57,21 @@ from backend.incident_logger import get_incident_logger
 
 MAX_UPLOAD_MB = float(os.environ.get("VOXSHIELD_MAX_UPLOAD_MB", "25"))
 ALLOWED_EXTENSIONS = {".flac", ".wav", ".ogg", ".mp3", ".m4a"}
+APP_VERSION = os.environ.get("VOXSHIELD_API_VERSION", "1.1.0")
+EXPOSE_PATHS = os.environ.get("VOXSHIELD_EXPOSE_PATHS", "false").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "VOXSHIELD_CORS_ORIGINS", "http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
+MAX_CONCURRENT_INFERENCES = max(
+    1, int(os.environ.get("VOXSHIELD_MAX_CONCURRENT_INFERENCES", "2"))
+)
+INFERENCE_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_INFERENCES)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,7 +114,7 @@ app = FastAPI(
         "All inference runs on-device. No external AI APIs. "
         "VoxShieldNet is trained from random initialization."
     ),
-    version="1.0.0",
+    version=APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -105,7 +123,7 @@ app = FastAPI(
 # CORS — permissive for local development; restrict in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -133,6 +151,15 @@ def _get_logger():
     return _incident_log
 
 
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -147,18 +174,27 @@ async def health():
     """
     engine = _get_engine()
     return {
-        "status":      "ok",
+        "status": "ok",
         "model_ready": engine.is_ready(),
-        "device":      str(engine.device),
-        "checkpoint":  (
-            str(engine.checkpoint_path) if engine.checkpoint_path else None
-        ),
+        "device": str(engine.device),
         "inference_mode": engine.inference_mode,
-        "version":     "1.0.0",
+        "version": APP_VERSION,
     }
 
 
-@app.get("/model-info", summary="Detailed model information")
+@app.get("/ready", summary="Model readiness check")
+async def ready():
+    engine = _get_engine()
+    if not engine.is_ready():
+        raise HTTPException(status_code=503, detail="Model is not ready")
+    return {"status": "ready", "model_ready": True, "version": APP_VERSION}
+
+
+@app.get(
+    "/model-info",
+    summary="Detailed model information",
+    dependencies=[Depends(require_api_key)],
+)
 async def model_info():
     """
     Returns complete model metadata including:
@@ -175,13 +211,19 @@ async def model_info():
     """
     engine = _get_engine()
     info = engine.model_info()
-    # Explicitly mark pretrained=false at API level
+    # Explicitly mark pretrained=false at API level.
     info["pretrained"] = False
     info["external_api"] = False
+    if not EXPOSE_PATHS:
+        info["checkpoint"] = None
+        info["dataset_source"] = None
     return info
 
 
-@app.post("/predict", summary="Analyze uploaded audio for spoofing")
+@app.post(
+    "/predict", summary="Analyze uploaded audio for spoofing",
+    dependencies=[Depends(require_api_key)],
+)
 async def predict(
     request: Request,
     file: UploadFile = File(..., description="Audio file (.flac, .wav, .ogg, .mp3)"),
@@ -210,6 +252,17 @@ async def predict(
     filename = file.filename or "unknown"
 
     # ── File size check ───────────────────────────────────────────────────────
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > int(MAX_UPLOAD_MB * 1024 * 1024 * 1.10):
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds maximum size of {MAX_UPLOAD_MB:.0f} MB.",
+                )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header.")
+
     raw_bytes = await file.read()
     file_size = len(raw_bytes)
     try:
@@ -232,7 +285,7 @@ async def predict(
 
     # ── Audio preprocessing ───────────────────────────────────────────────────
     try:
-        wav = preprocessor.from_bytes(raw_bytes, extension=suffix)
+        wav = await run_in_threadpool(preprocessor.from_bytes, raw_bytes, suffix)
     except AudioPreprocessorError as e:
         result = {
             "classification":         "ERROR",
@@ -251,15 +304,22 @@ async def predict(
             "status":                 "error",
             "error":                  str(e),
         }
-        incident_log.log_incident(result, filename=filename,
-                                  file_size_bytes=file_size, session_id=sid)
+        await run_in_threadpool(
+            incident_log.log_incident,
+            result,
+            filename=filename,
+            file_size_bytes=file_size,
+            session_id=sid,
+        )
         raise HTTPException(status_code=422, detail=str(e))
 
     # ── Inference ─────────────────────────────────────────────────────────────
-    result = engine.predict(wav)
+    async with INFERENCE_SEMAPHORE:
+        result = await run_in_threadpool(engine.predict, wav)
 
     # ── Logging ───────────────────────────────────────────────────────────────
-    incident_log.log_incident(
+    await run_in_threadpool(
+        incident_log.log_incident,
         result,
         filename=filename,
         file_size_bytes=file_size,
@@ -270,7 +330,10 @@ async def predict(
     return JSONResponse(content=result)
 
 
-@app.get("/incidents", summary="List logged incidents")
+@app.get(
+    "/incidents", summary="List logged incidents",
+    dependencies=[Depends(require_api_key)],
+)
 async def get_incidents(
     limit: int = 50,
     offset: int = 0,
@@ -290,14 +353,20 @@ async def get_incidents(
     return {"incidents": incidents, "count": len(incidents), "offset": offset}
 
 
-@app.get("/incidents/stats", summary="Incident aggregate statistics")
+@app.get(
+    "/incidents/stats", summary="Incident aggregate statistics",
+    dependencies=[Depends(require_api_key)],
+)
 async def incidents_stats():
     """Return aggregate statistics over all logged incidents."""
     incident_log = _get_logger()
     return incident_log.get_stats()
 
 
-@app.get("/incidents/timeline", summary="Recent incident timeline (for dashboard)")
+@app.get(
+    "/incidents/timeline", summary="Recent incident timeline (for dashboard)",
+    dependencies=[Depends(require_api_key)],
+)
 async def incidents_timeline(n: int = 20):
     """Return last N incidents for live timeline display."""
     if n > 100:
@@ -306,7 +375,10 @@ async def incidents_timeline(n: int = 20):
     return {"timeline": incident_log.get_recent_timeline(n)}
 
 
-@app.post("/reload-model", summary="Reload model from disk")
+@app.post(
+    "/reload-model", summary="Reload model from disk",
+    dependencies=[Depends(require_api_key)],
+)
 async def reload_model():
     """
     Reload the inference model from disk.
@@ -334,8 +406,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "status": "error",
-            "error":  "Internal server error",
-            "detail": str(exc),
+            "error": "Internal server error",
         },
     )
 
