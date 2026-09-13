@@ -48,6 +48,7 @@ from starlette.concurrency import run_in_threadpool
 
 from inference.engine import get_engine, reload_engine
 from inference.preprocessor import AudioPreprocessor, AudioPreprocessorError
+from inference.long_audio import LongAudioAnalyzer, LongAudioError, decode_full_audio
 from backend.incident_logger import get_incident_logger
 from backend.security import require_api_key
 
@@ -327,6 +328,161 @@ async def predict(
     )
 
     # ── Response ──────────────────────────────────────────────────────────────
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/predict-long",
+    summary="Analyze long audio via overlapping 4-second windows",
+    dependencies=[Depends(require_api_key)],
+)
+async def predict_long(
+    request: Request,
+    file: UploadFile = File(
+        ..., description="Audio file (.flac, .wav, .ogg, .mp3) of any length"
+    ),
+    session_id: Optional[str] = Form(None),
+    window_sec: float = Form(
+        default=4.0,
+        description="Window length in seconds (fixed by model; must be 4.0)",
+        ge=1.0,
+        le=10.0,
+    ),
+    hop_sec: float = Form(
+        default=2.0,
+        description="Hop / stride between window starts in seconds",
+        ge=0.5,
+        le=10.0,
+    ),
+    top_fraction: float = Form(
+        default=0.25,
+        description="Fraction of highest-spoof windows used for final score",
+        ge=0.05,
+        le=1.0,
+    ),
+):
+    """
+    Upload an audio file of any length and receive a spoof detection result.
+
+    The audio is decoded in full (without truncation), resampled to 16 kHz mono,
+    and split into overlapping 4-second windows.  Each window is classified by
+    VoxShieldNet independently.  A final verdict is derived by taking the mean
+    spoof probability over the top `top_fraction` windows (conservative policy).
+
+    Response fields include:
+    - classification (SPOOF | BONA_FIDE | UNAVAILABLE)
+    - spoof_probability, bona_fide_probability, confidence
+    - decision_threshold, risk_score, threat_level, recommended_action
+    - audio_duration_sec, windows_analyzed, window_seconds, hop_seconds
+    - aggregation details and per-window results
+    - model_version, inference_mode, device
+    """
+    engine = _get_engine()
+    incident_log = _get_logger()
+
+    sid = session_id or str(uuid.uuid4())[:8]
+    filename = file.filename or "unknown"
+
+    # ── hop_sec sanity ────────────────────────────────────────────────────────
+    if hop_sec > window_sec:
+        raise HTTPException(
+            status_code=400,
+            detail=f"hop_sec ({hop_sec}) must be ≤ window_sec ({window_sec}).",
+        )
+
+    # ── File size check ───────────────────────────────────────────────────────
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > int(MAX_UPLOAD_MB * 1024 * 1024 * 1.10):
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds maximum size of {MAX_UPLOAD_MB:.0f} MB.",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length header."
+            )
+
+    raw_bytes = await file.read()
+    file_size = len(raw_bytes)
+
+    # Reuse the preprocessor's size validator (same limit)
+    preprocessor = _get_preprocessor()
+    try:
+        preprocessor.validate_upload_size(file_size, max_mb=MAX_UPLOAD_MB)
+    except AudioPreprocessorError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+
+    # ── Extension check ───────────────────────────────────────────────────────
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        suffix = ".wav"
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file type: '{suffix}'. "
+                f"Accepted: {sorted(ALLOWED_EXTENSIONS)}"
+            ),
+        )
+
+    # ── Full-audio decode (NO truncation) ─────────────────────────────────────
+    try:
+        wav = await run_in_threadpool(decode_full_audio, raw_bytes, suffix)
+    except LongAudioError as e:
+        error_result = {
+            "classification":        "ERROR",
+            "spoof_probability":     None,
+            "bona_fide_probability": None,
+            "confidence":            None,
+            "decision_threshold":    engine.threshold,
+            "risk_score":            None,
+            "threat_level":          "UNKNOWN",
+            "recommended_action":    "Audio could not be decoded. Check file format.",
+            "risk_breakdown":        {},
+            "audio_duration_sec":    None,
+            "windows_analyzed":      0,
+            "window_seconds":        window_sec,
+            "hop_seconds":           hop_sec,
+            "aggregation":           {"method": "top_fraction_mean"},
+            "window_results":        [],
+            "model_version":         None,
+            "inference_mode":        engine.inference_mode,
+            "device":                str(engine.device),
+            "status":                "error",
+            "error":                 str(e),
+            "latency_ms":            0.0,
+        }
+        await run_in_threadpool(
+            incident_log.log_incident,
+            error_result,
+            filename=filename,
+            file_size_bytes=file_size,
+            session_id=sid,
+        )
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # ── Long-audio inference ───────────────────────────────────────────────────
+    analyzer = LongAudioAnalyzer(
+        engine,
+        window_sec=window_sec,
+        hop_sec=hop_sec,
+        top_fraction=top_fraction,
+    )
+
+    async with INFERENCE_SEMAPHORE:
+        result = await run_in_threadpool(analyzer.analyze, wav)
+
+    # ── Log incident (uses same schema; extra fields are silently ignored) ─────
+    await run_in_threadpool(
+        incident_log.log_incident,
+        result,
+        filename=filename,
+        file_size_bytes=file_size,
+        session_id=sid,
+    )
+
     return JSONResponse(content=result)
 
 
