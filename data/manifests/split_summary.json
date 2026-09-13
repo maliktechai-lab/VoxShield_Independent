@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-09-13T15:24:34.461520+00:00",
+  "manifest_path": "data/manifests/production_audio.csv",
+  "seed": 42,
+  "fractions": {
+    "train": 0.7,
+    "calibration": 0.15,
+    "test": 0.15
+  },
+  "total_rows": 0,
+  "leakage_check": {
+    "clean": true
+  },
+  "split_statistics": {}
+}

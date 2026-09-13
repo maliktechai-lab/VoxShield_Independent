@@ -3,12 +3,22 @@
 # Audio datasets and model weights are NOT committed to Git.
 # Use cloud storage or a data registry for large files.
 
-# ── Dataset directories (NEVER commit) ────────────────────────────────────────
+# ── Dataset directories (NEVER commit audio/binary data) ─────────────────────
 dataset/
 dataset_real/
-data/
+data/raw/
+data/processed/
+production_data/
 datasets/
 ASVspoof*/
+# Allow manifest text files (CSV/JSON) inside data/manifests/
+!data/
+!data/manifests/
+!data/manifests/*.csv
+!data/manifests/*.json
+!data/__init__.py
+!data/build_manifest.py
+!data/make_splits.py
 
 # ── Audio files ───────────────────────────────────────────────────────────────
 *.flac

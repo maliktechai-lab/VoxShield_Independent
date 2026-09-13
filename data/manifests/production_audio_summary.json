@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-09-13T15:24:27.771574+00:00",
+  "root_directory": "/mnt/d/VoxShield_Independent/production_data",
+  "manifest_path": "data/manifests/production_audio.csv",
+  "error_path": "data/manifests/production_audio_errors.csv",
+  "min_duration_sec": 0.1,
+  "files_discovered": 0,
+  "files_valid": 0,
+  "files_errors": 0,
+  "files_warnings": 0,
+  "total_duration_sec": 0,
+  "mean_duration_sec": 0.0,
+  "by_label": {
+    "counts": {},
+    "durations": {}
+  },
+  "by_domain": {
+    "counts": {},
+    "durations": {}
+  },
+  "by_source": {
+    "counts": {}
+  },
+  "by_sample_rate": {},
+  "by_channels": {},
+  "errors_by_type": {},
+  "disclaimer": "This manifest reflects discovered audio files only. No model inference was performed. Metadata is extracted from audio file headers."
+}
