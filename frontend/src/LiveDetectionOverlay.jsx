@@ -673,6 +673,31 @@ export default function LiveDetectionOverlay() {
             )}
           </div>
         )}
+
+        {/* Detection scope notice — always visible while active */}
+        {active && (
+          <div style={{
+            marginTop: 8,
+            padding: '7px 9px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 9,
+            color: 'var(--text-muted)',
+            lineHeight: 1.4,
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 3, color: 'var(--text-secondary)' }}>
+              DETECTION SCOPE
+            </div>
+            <div>Detects: direct digital TTS / voice-conversion files.</div>
+            <div style={{ marginTop: 2, color: '#f59e0b' }}>
+              Limitation: acoustic replay (TTS played via speaker then
+              re-recorded by mic) is not reliably detected — the model
+              was trained on ASVspoof5 logical-access attacks only (no
+              physical channel).
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
