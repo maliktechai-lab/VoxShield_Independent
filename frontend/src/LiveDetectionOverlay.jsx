@@ -162,19 +162,19 @@ function emaUpdate(prev, value, alpha) {
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function StatusPill({ active, analyzing }) {
-  const label = analyzing ? 'ANALYZING' : active ? 'MIC LIVE' : 'MIC OFF'
-  const color = analyzing ? 'var(--accent)' : active ? 'var(--red)' : 'var(--text-muted)'
-  const bg    = analyzing ? 'rgba(99,102,241,0.15)' : active ? 'var(--red-dim)' : 'var(--bg-secondary)'
+  const label  = analyzing ? 'ANALYZING' : active ? 'MIC LIVE' : 'MIC OFF'
+  const color  = analyzing ? 'var(--accent)' : active ? 'var(--red)' : 'var(--text-muted)'
+  const bg     = analyzing ? 'rgba(99,102,241,0.15)' : active ? 'var(--red-dim)' : 'var(--bg-secondary)'
   const border = analyzing ? 'rgba(99,102,241,0.3)' : active ? 'rgba(239,68,68,0.3)' : 'var(--border)'
   return (
     <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-      padding: '3px 8px', borderRadius: 4,
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+      padding: '4px 10px', borderRadius: 4,
       color, background: bg, border: `1px solid ${border}`,
     }}>
       <span className={active ? 'pulse' : ''} style={{
-        width: 6, height: 6, borderRadius: '50%', background: color,
+        width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0,
       }} />
       {label}
     </span>
@@ -527,13 +527,16 @@ export default function LiveDetectionOverlay() {
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 12px', borderBottom: '1px solid var(--border)',
+        padding: '11px 14px', borderBottom: '1px solid var(--border)',
       }}>
         <div>
-          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', color: 'var(--text-primary)' }}>
-            LIVE MICROPHONE DETECTION
+          <div style={{
+            fontSize: 12, fontWeight: 700, letterSpacing: '0.08em',
+            color: 'var(--text-primary)', textTransform: 'uppercase',
+          }}>
+            Live Microphone Detection
           </div>
-          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.4 }}>
             Rolling 4s windows · VoxShieldNet local inference
           </div>
         </div>
@@ -546,25 +549,25 @@ export default function LiveDetectionOverlay() {
         {/* Meters row */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
           {/* Audio level */}
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 4 }}>AUDIO LEVEL</div>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Audio Level</div>
             <div style={{ height: 5, background: 'var(--bg-card)', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{ width: `${level * 100}%`, height: '100%', background: active ? 'var(--accent)' : 'var(--border)', transition: 'width 0.1s' }} />
             </div>
           </div>
 
           {/* Window progress */}
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 2 }}>WINDOW</div>
-            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Window</div>
+            <div style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', lineHeight: 1.3 }}>
               {active ? `${Math.round(windowProgress * WINDOW_SECONDS)}/${WINDOW_SECONDS}s` : '—'}
             </div>
           </div>
 
           {/* Window count */}
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 2 }}>WINDOWS</div>
-            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Windows</div>
+            <div style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', lineHeight: 1.3 }}>
               {windowCount}
             </div>
           </div>
@@ -573,7 +576,7 @@ export default function LiveDetectionOverlay() {
         {/* Start/Stop button */}
         <button
           className="btn btn-primary"
-          style={{ width: '100%', padding: '10px', fontSize: 12 }}
+          style={{ width: '100%', padding: '11px', fontSize: 13 }}
           onClick={() => { if (active) void cleanup(); else void start() }}
           disabled={status === 'requesting'}
         >
@@ -586,8 +589,9 @@ export default function LiveDetectionOverlay() {
 
         {/* Status / error message */}
         <div style={{
-          marginTop: 8, fontSize: 10, minHeight: 14,
+          marginTop: 8, fontSize: 12, minHeight: 16,
           color: status === 'error' ? 'var(--red)' : 'var(--text-muted)',
+          lineHeight: 1.4,
         }}>
           {error
             ? `⚠ ${error}`
@@ -607,21 +611,40 @@ export default function LiveDetectionOverlay() {
             background: verdictBg,
             border: `1px solid ${verdictColor}40`,
             borderRadius: 'var(--radius-sm)',
-            padding: '10px 11px',
+            padding: '12px 13px',
           }}>
-            {/* Verdict + raw prob */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            {/* Verdict + raw prob — strong hierarchy */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
               <div>
-                <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>
-                  SMOOTHED VERDICT
+                <div style={{
+                  fontSize: 10, color: 'var(--text-muted)',
+                  letterSpacing: '0.07em', textTransform: 'uppercase',
+                  marginBottom: 3,
+                }}>
+                  Smoothed Verdict
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: verdictColor, marginTop: 2 }}>
+                {/* Verdict — 22px, 800 — the most prominent element */}
+                <div style={{
+                  fontSize: 22, fontWeight: 800,
+                  color: verdictColor, lineHeight: 1.2,
+                  letterSpacing: '0.02em',
+                }}>
                   {verdictText}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>RAW SPOOF PROB</div>
-                <div style={{ fontSize: 14, fontFamily: 'var(--font-mono)', color: verdictColor, marginTop: 2 }}>
+                <div style={{
+                  fontSize: 10, color: 'var(--text-muted)',
+                  letterSpacing: '0.05em', textTransform: 'uppercase',
+                  marginBottom: 3,
+                }}>
+                  Raw Spoof Prob
+                </div>
+                {/* Probability — 16px mono, secondary */}
+                <div style={{
+                  fontSize: 16, fontFamily: 'var(--font-mono)',
+                  color: verdictColor, fontWeight: 600, lineHeight: 1.2,
+                }}>
                   {probabilityPct(rawProb)}
                 </div>
               </div>
@@ -631,7 +654,11 @@ export default function LiveDetectionOverlay() {
             <ProbBar value={rawProb} />
 
             {/* Smoothed prob + threshold */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10, color: 'var(--text-secondary)' }}>
+            <div style={{
+              display: 'flex', justifyContent: 'space-between',
+              marginTop: 8, fontSize: 11, color: 'var(--text-secondary)',
+              lineHeight: 1.4,
+            }}>
               <span>
                 Smoothed: {probabilityPct(smoothedProb)} (EMA α={EMA_ALPHA})
               </span>
@@ -641,20 +668,27 @@ export default function LiveDetectionOverlay() {
             </div>
 
             {/* Threat level + latency */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 10, color: 'var(--text-secondary)', gap: 8 }}>
-              <span title="From model risk engine">
+            <div style={{
+              display: 'flex', justifyContent: 'space-between',
+              marginTop: 6, fontSize: 12, color: 'var(--text-secondary)',
+              gap: 8, alignItems: 'center',
+            }}>
+              <span style={{ fontWeight: 600, letterSpacing: '0.04em' }} title="From model risk engine">
                 {liveResult.threat_level ?? '—'}
               </span>
-              <span title="Backend inference latency">
+              <span style={{ fontFamily: 'var(--font-mono)' }} title="Backend inference latency">
                 {lastLatency !== null ? `${Number(lastLatency).toFixed(0)}ms` : '—'}
               </span>
             </div>
 
             {/* Recent window history sparkline */}
             {recentHistory.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 4 }}>
-                  RECENT WINDOWS (last {recentHistory.length})
+              <div style={{ marginTop: 10 }}>
+                <div style={{
+                  fontSize: 10, color: 'var(--text-muted)',
+                  marginBottom: 5, letterSpacing: '0.05em', textTransform: 'uppercase',
+                }}>
+                  Recent Windows (last {recentHistory.length})
                 </div>
                 <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 20 }}>
                   {recentHistory.map((p, i) => {
@@ -678,19 +712,25 @@ export default function LiveDetectionOverlay() {
         {active && (
           <div style={{
             marginTop: 8,
-            padding: '7px 9px',
+            padding: '8px 10px',
             background: 'var(--bg-secondary)',
             border: '1px solid var(--border)',
             borderRadius: 'var(--radius-sm)',
-            fontSize: 9,
+            fontSize: 11,
             color: 'var(--text-muted)',
-            lineHeight: 1.4,
+            lineHeight: 1.5,
           }}>
-            <div style={{ fontWeight: 700, marginBottom: 3, color: 'var(--text-secondary)' }}>
-              DETECTION SCOPE
+            <div style={{
+              fontWeight: 700, marginBottom: 4,
+              color: 'var(--text-secondary)',
+              fontSize: 11,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+            }}>
+              Detection Scope
             </div>
             <div>Detects: direct digital TTS / voice-conversion files.</div>
-            <div style={{ marginTop: 2, color: '#f59e0b' }}>
+            <div style={{ marginTop: 3, color: '#f59e0b' }}>
               Limitation: acoustic replay (TTS played via speaker then
               re-recorded by mic) is not reliably detected — the model
               was trained on ASVspoof5 logical-access attacks only (no

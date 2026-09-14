@@ -3,6 +3,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  /* ── Colour palette ─────────────────────────────────────────────────────── */
   --bg-primary:    #0a0e1a;
   --bg-secondary:  #0f1528;
   --bg-card:       #131c30;
@@ -30,27 +31,65 @@
   --red-dim:       rgba(239, 68, 68, 0.15);
   --red-glow:      rgba(239, 68, 68, 0.3);
 
+  /* ── Radius ─────────────────────────────────────────────────────────────── */
   --radius-sm:   4px;
   --radius:      8px;
   --radius-lg:   12px;
   --radius-xl:   16px;
 
+  /* ── Typography ─────────────────────────────────────────────────────────── */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
 
+  /*
+   * Type scale — everything maps back here.
+   * Changing a variable updates every component that references it.
+   *
+   * Tier        Size   Weight   Use
+   * ─────────────────────────────────────────────────────────────────
+   * --fs-hero   30px   700      Main dashboard page title
+   * --fs-h1     24px   700      Section headings (currently unused)
+   * --fs-h2     18px   600      Card prominent titles
+   * --fs-metric 30px   700      KPI / metric card big numbers
+   * --fs-body   14px   400      Default body text
+   * --fs-sm     13px   400      Secondary body, table body rows
+   * --fs-xs     12px   400/500  Muted labels, status text, model metrics
+   * --fs-xxs    11px   500/600  Badges, table headers, micro-labels
+   * --fs-nano   10px   600      Footer, intentional micro text only
+   * ─────────────────────────────────────────────────────────────────
+   */
+  --fs-hero:    30px;
+  --fs-h1:      24px;
+  --fs-h2:      17px;
+  --fs-metric:  30px;
+  --fs-body:    14px;
+  --fs-sm:      13px;
+  --fs-xs:      12px;
+  --fs-xxs:     11px;
+  --fs-nano:    10px;
+
+  /* Line heights */
+  --lh-heading: 1.2;
+  --lh-body:    1.5;
+  --lh-compact: 1.4;
+
+  /* ── Misc ────────────────────────────────────────────────────────────────── */
   --transition: 200ms ease;
   --shadow:     0 4px 24px rgba(0,0,0,0.4);
   --shadow-lg:  0 8px 48px rgba(0,0,0,0.6);
 }
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
 
 html, body, #root {
   min-height: 100vh;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Scrollbar */
@@ -59,46 +98,62 @@ html, body, #root {
 ::-webkit-scrollbar-thumb      { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover{ background: var(--border-focus); }
 
-/* Typography */
-h1, h2, h3, h4, h5 { font-weight: 600; color: var(--text-primary); }
-code, pre { font-family: var(--font-mono); }
+/* ── Heading defaults ──────────────────────────────────────────────────────── */
 
-/* Utility classes */
+h1 { font-size: var(--fs-hero);  font-weight: 700; line-height: var(--lh-heading); color: var(--text-primary); }
+h2 { font-size: var(--fs-h1);   font-weight: 700; line-height: var(--lh-heading); color: var(--text-primary); }
+h3 { font-size: var(--fs-h2);   font-weight: 600; line-height: var(--lh-heading); color: var(--text-primary); }
+h4 { font-size: var(--fs-body); font-weight: 600; line-height: var(--lh-body);    color: var(--text-primary); }
+h5 { font-size: var(--fs-sm);   font-weight: 600; line-height: var(--lh-body);    color: var(--text-primary); }
+
+code, pre { font-family: var(--font-mono); font-size: var(--fs-sm); }
+
+/* ── Utility ───────────────────────────────────────────────────────────────── */
+
 .mono    { font-family: var(--font-mono); }
 .muted   { color: var(--text-secondary); }
 .dim     { color: var(--text-muted); }
 .truncate{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Status badges */
+/* ── Badges ────────────────────────────────────────────────────────────────── */
+
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-xxs);
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  line-height: 1;
 }
-.badge-green  { background: var(--green-dim); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+.badge-green  { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(16,185,129,0.3); }
 .badge-yellow { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
 .badge-orange { background: var(--orange-dim); color: var(--orange); border: 1px solid rgba(249,115,22,0.3); }
-.badge-red    { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
-.badge-blue   { background: rgba(37,99,235,0.15); color: #60a5fa; border: 1px solid rgba(37,99,235,0.3); }
+.badge-red    { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(239,68,68,0.3); }
+.badge-blue   { background: rgba(37,99,235,0.15);   color: #60a5fa; border: 1px solid rgba(37,99,235,0.3); }
 .badge-gray   { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
 
-/* Card */
+/* ── Card ──────────────────────────────────────────────────────────────────── */
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 16px;
 }
+
+/*
+ * card-title: uppercase section label inside a card.
+ * Intentionally small — it labels a section, not a heading.
+ * 11px, 600 weight, spaced uppercase.
+ */
 .card-title {
-  font-size: 11px;
+  font-size: var(--fs-xxs);
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 12px;
@@ -107,37 +162,41 @@ code, pre { font-family: var(--font-mono); }
   gap: 8px;
 }
 
-/* Divider */
+/* ── Divider ───────────────────────────────────────────────────────────────── */
+
 .divider { height: 1px; background: var(--border); margin: 12px 0; }
 
-/* Pulse animation for live indicator */
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-.pulse { animation: pulse 2s infinite; }
+/* ── Animations ────────────────────────────────────────────────────────────── */
 
-/* Scan animation */
+@keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:.4} }
+.pulse             { animation: pulse 2s infinite; }
+
 @keyframes scan {
   0%   { background-position: 0% 0%; }
   100% { background-position: 0% 100%; }
 }
 
-/* Glow effect for SPOOF state */
 @keyframes glow-red {
   0%,100% { box-shadow: 0 0 20px var(--red-glow); }
   50%     { box-shadow: 0 0 40px var(--red-glow), 0 0 60px rgba(239,68,68,0.15); }
 }
 
-/* Spinner */
 @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+/* ── Spinner ───────────────────────────────────────────────────────────────── */
+
 .spinner {
-  width: 20px; height: 20px;
+  width: 18px; height: 18px;
   border: 2px solid var(--border);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   display: inline-block;
+  flex-shrink: 0;
 }
 
-/* Button */
+/* ── Button ────────────────────────────────────────────────────────────────── */
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -145,19 +204,23 @@ code, pre { font-family: var(--font-mono); }
   gap: 8px;
   padding: 8px 16px;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: var(--fs-sm);     /* 13px */
   font-weight: 600;
+  font-family: var(--font-sans);
   cursor: pointer;
   border: none;
   transition: var(--transition);
   user-select: none;
+  line-height: 1.4;
 }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .btn-primary {
   background: var(--accent);
   color: #fff;
 }
 .btn-primary:not(:disabled):hover { background: var(--accent-hover); }
+
 .btn-secondary {
   background: transparent;
   color: var(--text-secondary);
@@ -169,7 +232,8 @@ code, pre { font-family: var(--font-mono); }
   background: var(--bg-card-hover);
 }
 
-/* Progress bar */
+/* ── Progress bar ──────────────────────────────────────────────────────────── */
+
 .progress-bar {
   height: 4px;
   border-radius: 2px;
@@ -181,3 +245,29 @@ code, pre { font-family: var(--font-mono); }
   border-radius: 2px;
   transition: width 0.5s ease;
 }
+
+/* ── Table ─────────────────────────────────────────────────────────────────── */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);     /* 13px body rows */
+}
+.data-table thead th {
+  text-align: left;
+  padding: 7px 10px;
+  font-size: var(--fs-xxs);    /* 11px headers */
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.data-table tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  line-height: var(--lh-compact);
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
